@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 IHP GmbH
+"""Tests for the chiplet_format_io reference reader/writer."""
+import sys
+from pathlib import Path
+
+import pytest
+
+import chiplet_format_io as cfio
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+EXAMPLES = REPO_ROOT / "examples"
+
+
+def test_roundtrip_canonical_example():
+    """load -> dump -> load is a semantic fixed point on a real example."""
+    path = EXAMPLES / "interposer_demo_design.chiplet"
+    first = cfio.load(path)
+    text = cfio.dumps(first)
+    second = cfio.loads(text)
+    assert first == second
+    # key order preserved on the top level
+    assert list(first.keys())[0] == "format_version"
+
+
+def test_all_example_chiplets_parse():
+    chiplets = list(EXAMPLES.glob("*.chiplet"))
+    assert chiplets, "expected at least one example .chiplet"
+    for p in chiplets:
+        data = cfio.load(p, allow_intermediate=True)
+        assert str(data["format_version"]) == cfio.SUPPORTED_FORMAT_VERSION
+
+
+def test_missing_format_version_rejected():
+    with pytest.raises(cfio.ChipletFormatError):
+        cfio.loads("assembly:\n  name: x\n")
+
+
+def test_unsupported_version_rejected():
+    with pytest.raises(cfio.ChipletFormatError):
+        cfio.loads('format_version: "2.0"\nassembly:\n  name: x\n')
+
+
+def test_assembly_name_required():
+    with pytest.raises(cfio.ChipletFormatError):
+        cfio.loads('format_version: "1.0"\nassembly:\n  units: um\n')
+
+
+def test_component_requires_id_and_type():
+    doc = 'format_version: "1.0"\nassembly:\n  name: a\ncomponents:\n- type: die\n'
+    with pytest.raises(cfio.ChipletFormatError):
+        cfio.loads(doc)
+
+
+def test_intermediate_refused_by_default_then_allowed():
+    doc = (
+        'format_version: "1.0"\n'
+        "_metadata:\n  finalize_required: true\n"
+        "assembly:\n  name: a\n"
+    )
+    with pytest.raises(cfio.ChipletFormatError):
+        cfio.loads(doc)
+    data = cfio.loads(doc, allow_intermediate=True)
+    assert data["assembly"]["name"] == "a"
+
+
+def test_dump_roundtrips_components_order():
+    doc = cfio.load(EXAMPLES / "interposer_demo_design.chiplet")
+    ids = [c["id"] for c in doc["components"]]
+    reloaded = cfio.loads(cfio.dumps(doc))
+    assert [c["id"] for c in reloaded["components"]] == ids
+
+
+def test_no_gpl_runtime_dependency():
+    """Importing/using the library must not pull in pcbnew or klayout."""
+    cfio.loads('format_version: "1.0"\nassembly:\n  name: a\n')
+    assert "pcbnew" not in sys.modules
+    assert "klayout" not in sys.modules
+
+
+def test_source_has_no_gpl_imports():
+    src = Path(cfio.__file__).read_text(encoding="utf-8")
+    assert "import pcbnew" not in src
+    assert "import klayout" not in src
+    assert "from klayout" not in src

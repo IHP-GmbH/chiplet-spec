@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 IHP GmbH
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chiplet-format-io"
+version = "0.1.0"
+description = "Permissive (Apache-2.0) reference reader/writer for the .chiplet assembly format"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+authors = [{ name = "IHP GmbH" }]
+keywords = ["chiplet", "heterogeneous integration", "eda", "interchange format"]
+dependencies = ["PyYAML>=5.1"]
+
+[tool.setuptools]
+packages = ["chiplet_format_io"]
