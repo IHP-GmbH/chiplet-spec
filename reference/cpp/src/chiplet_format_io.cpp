@@ -256,10 +256,12 @@ void check_document_gate(const YAML::Node& root, const std::string& formatVersio
                                  std::string(SUPPORTED_FORMAT_VERSION) + "\"");
     }
     if (metadata.finalize_required && !allow_intermediate) {
+        const std::string finalizer = metadata.finalizer.empty()
+            ? "hyp_to_gds.py --update-chiplet-file" : metadata.finalizer;
         throw ChipletFormatError(
             "this is an intermediate .chiplet (_metadata.finalize_required: "
-            "true); run the finalizer (e.g. hyp_to_gds --update-chiplet-file) "
-            "before loading, or pass allow_intermediate=true");
+            "true); run " + finalizer + " to finalize, or pass "
+            "allow_intermediate=true");
     }
     if (!root["assembly"] || !root["assembly"].IsMap()) {
         throw ChipletFormatError("missing or invalid 'assembly' section");
@@ -303,9 +305,12 @@ void validate(const ChipletDocument& doc, bool allow_intermediate) {
                                  std::string(SUPPORTED_FORMAT_VERSION) + "\"");
     }
     if (doc.metadata.finalize_required && !allow_intermediate) {
+        const std::string finalizer = doc.metadata.finalizer.empty()
+            ? "hyp_to_gds.py --update-chiplet-file" : doc.metadata.finalizer;
         throw ChipletFormatError(
             "this is an intermediate .chiplet (_metadata.finalize_required: "
-            "true); pass allow_intermediate=true to accept it");
+            "true); run " + finalizer + " to finalize, or pass "
+            "allow_intermediate=true");
     }
     if (doc.assembly.name.empty()) {
         throw ChipletFormatError("assembly.name is required");
