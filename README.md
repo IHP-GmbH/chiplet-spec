@@ -27,6 +27,7 @@ anyone — open-source or commercial — can build independent implementations.
 | `schemas/*.schema.json` | Machine-readable JSON Schemas (boundary manifest, interconnect methods, layers, rule params, interconnect rules). |
 | `schemas/chiplet_pads.json` | Pad-layer vocabulary for black-box chiplets (GDS 205/0, 205/25, 206/0). |
 | `examples/` | Sample `.chiplet`, `*.boundaries.json`, and `interconnect_methods.json`. |
+| `reference/python/`, `reference/cpp/` | Dependency-clean reference reader/writer libraries (`chiplet-format-io`): Python (PyYAML only) and C++ (yaml-cpp only). Apache-2.0, with no GPL/Qt/KLayout dependency, so they embed in tools under any license. |
 
 ## License and implementer rights
 
@@ -50,9 +51,11 @@ embedding KiCad or KLayout), never from these formats.
 
 ## Status
 
-Single source of truth for the formats. The implementing tool repositories will be
-migrated to consume their schemas and spec docs from here; until that migration lands,
-copies may still exist inside those repositories and this repository is authoritative.
+Single source of truth for the formats. Chiplet Studio already consumes the C++ reference
+library from here (vendored under its `src/formats/chiplet_format_io/`) and points its spec
+doc back here; the remaining tool repositories will likewise migrate to consume their
+schemas and spec docs from here. Until that migration completes, some copies may still exist
+inside those repositories and this repository is authoritative.
 
 Versioning is per-artifact (e.g. the `.chiplet` format carries `format_version`, the
 manifests carry `version`/`schema_version`). Changes follow semantic-versioning intent:
