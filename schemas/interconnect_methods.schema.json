@@ -1,0 +1,111 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ihp.example/interconnect_pdk/interconnect_methods.schema.json",
+  "title": "Interconnect method registry",
+  "description": "Schema for interconnect_methods.json. Structural validation only; cross-field invariants (unique GDS (layer,datatype), connection_stack layer names present in layer_registry, default_connection_library entries present in methods) are checked by python/tests/test_manifest.py.",
+  "type": "object",
+  "required": ["schema_version", "pdk", "default_method", "default_connection_library", "layer_registry", "fab_anchors", "methods"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {"type": "string"},
+    "pdk": {"type": "string"},
+    "description": {"type": "string"},
+    "default_method": {"type": "string"},
+    "default_connection_library": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1
+    },
+    "layer_registry": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["gds_layer", "gds_datatype", "material", "purpose"],
+        "additionalProperties": false,
+        "properties": {
+          "gds_layer": {"type": "integer", "minimum": 500},
+          "gds_datatype": {"type": "integer", "enum": [35, 36]},
+          "material": {"type": "string"},
+          "purpose": {"type": "string"}
+        }
+      }
+    },
+    "fab_anchors": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description", "interposer_pdk", "adk_attachment_adapter", "layers"],
+        "additionalProperties": false,
+        "properties": {
+          "description": {"type": "string"},
+          "interposer_pdk": {"type": "string"},
+          "adk_attachment_adapter": {"type": "string"},
+          "layers": {
+            "type": "object",
+            "additionalProperties": {"type": "string", "pattern": "^[0-9]+/[0-9]+$"}
+          }
+        }
+      }
+    },
+    "methods": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description", "vendor", "fab_anchor", "body_diameter_um", "layers_3d", "connection_stack", "fab_params", "pitch_rules", "adapter", "stackup_fragment"],
+        "additionalProperties": false,
+        "properties": {
+          "description": {"type": "string"},
+          "vendor": {"type": "string"},
+          "fab_anchor": {"type": "string"},
+          "body_diameter_um": {"type": "number", "exclusiveMinimum": 0},
+          "layers_3d": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "connection_stack": {
+            "type": "object",
+            "required": ["layers"],
+            "additionalProperties": false,
+            "properties": {
+              "layers": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["name", "material", "height", "diameter"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {"type": "string"},
+                    "material": {"type": "string"},
+                    "height": {"type": "number", "exclusiveMinimum": 0},
+                    "diameter": {"type": "number", "exclusiveMinimum": 0}
+                  }
+                }
+              }
+            }
+          },
+          "fab_params": {
+            "type": "object",
+            "required": ["passiv_opening_um", "tm2_enclosure_um"],
+            "additionalProperties": true,
+            "properties": {
+              "passiv_opening_um": {"type": "number", "exclusiveMinimum": 0},
+              "tm2_enclosure_um": {"type": "number", "exclusiveMinimum": 0}
+            }
+          },
+          "pitch_rules": {
+            "type": "object",
+            "required": ["IXN_spacing", "IXN_pitch"],
+            "additionalProperties": false,
+            "properties": {
+              "IXN_spacing": {"type": "number", "exclusiveMinimum": 0},
+              "IXN_pitch": {"type": "number", "exclusiveMinimum": 0}
+            }
+          },
+          "adapter": {"type": "string"},
+          "stackup_fragment": {"type": "string"}
+        }
+      }
+    }
+  }
+}

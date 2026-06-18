@@ -1,0 +1,111 @@
+{
+  "schema": "adk-boundary-manifest",
+  "version": "1.0.0",
+  "generator": "hyp_to_gds.py",
+  "assembly_gds": "interposer_wire_bonding_demo_complete.gds",
+  "dbu_um": 0.001,
+  "top_cell": "INTERPOSER",
+  "boundaries": [
+    {
+      "instance": "U2",
+      "source_die": "Metal_Test",
+      "class": "chiplet",
+      "transform": {
+        "origin_um": [
+          134670.234,
+          -68981.73
+        ],
+        "rotation_deg": 0.0,
+        "mirror_x": true,
+        "magnification": 1.0
+      },
+      "polygon_dbu": [
+        [
+          134281234,
+          -70280528
+        ],
+        [
+          134281234,
+          -67620528
+        ],
+        [
+          135059234,
+          -67620528
+        ],
+        [
+          135059234,
+          -70280528
+        ]
+      ],
+      "polygon_um": [
+        [
+          134281.234,
+          -70280.528
+        ],
+        [
+          134281.234,
+          -67620.528
+        ],
+        [
+          135059.234,
+          -67620.528
+        ],
+        [
+          135059.234,
+          -70280.528
+        ]
+      ]
+    },
+    {
+      "instance": "U1",
+      "source_die": "Metal_Test",
+      "class": "chiplet",
+      "transform": {
+        "origin_um": [
+          131454.121,
+          -69069.518
+        ],
+        "rotation_deg": 0.0,
+        "mirror_x": true,
+        "magnification": 1.0
+      },
+      "polygon_dbu": [
+        [
+          131065121,
+          -70368316
+        ],
+        [
+          131065121,
+          -67708316
+        ],
+        [
+          131843121,
+          -67708316
+        ],
+        [
+          131843121,
+          -70368316
+        ]
+      ],
+      "polygon_um": [
+        [
+          131065.121,
+          -70368.316
+        ],
+        [
+          131065.121,
+          -67708.316
+        ],
+        [
+          131843.121,
+          -67708.316
+        ],
+        [
+          131843.121,
+          -70368.316
+        ]
+      ]
+    }
+  ],
+  "assembly_gds_sha256": "210580f8fed2dcd7993befc3818c3665efd7de2e1e9c1dcd827c0edd2f75844f"
+}

@@ -1,0 +1,41 @@
+format_version: '1.0'
+assembly:
+  name: interposer_template
+  units: um
+technologies:
+  intm4tm2:
+    description: Imported from KiCad
+    layer_properties: /home/montanares/git/heterogenic_chip_design_project/interposer/libs.tech/klayout/tech/intm4tm2.lyp
+    dbu: 0.001
+  sg13g2:
+    description: Imported from KiCad
+    layer_properties: /home/montanares/git/heterogenic_chip_design_project/interposer/klayout/tech/sg13g2.lyp
+    dbu: 0.001
+components:
+- id: interposer
+  type: interposer
+  technology: intm4tm2
+  layout: /home/montanares/git/heterogenic_chip_design_project/kicad_designs/kicad_interposer_hyperlynx_to_gds/chiplet_files/interposer.gds
+  top_cell: TOP
+  dimensions:
+    width: 0.0
+    height: 0.0
+    thickness: 1560.0
+  position:
+    x: 0.0
+    y: 0.0
+    z: 0.0
+- id: REF**
+  type: die
+  technology: sg13g2
+  layout: /home/montanares/git/heterogenic_chip_design_project/gds_to_kicad_footprint/gds_files/Interposer_ANT_CuPi.gds
+  dimensions:
+    width: 1540.0
+    height: 3740.0
+    thickness: 0.0
+  position:
+    x: 159103.28
+    y: -101432.6
+    z: 1560.0
+  rotation:
+    z: 0.0

@@ -1,0 +1,126 @@
+{
+  "schema_version": "1.0",
+  "pdk": "interconnect_pdk",
+  "description": "Interconnect method registry. Single source of truth for the post-fabrication interconnection elements (Cu pillars, solder bumps, microbumps) that join chiplets to an interposer. Decoupled from the interposer PDK so the bumping method can come from any vendor, not only IHP. Tools read this instead of hardcoding cupillar_opt1/2/3.",
+  "default_method": "cupillar_opt2",
+  "default_connection_library": [
+    "cupillar_opt1",
+    "cupillar_opt2",
+    "cupillar_opt3",
+    "sbump_sac305"
+  ],
+
+  "layer_registry": {
+    "CuPillar":        {"gds_layer": 500, "gds_datatype": 35, "material": "Cu",     "purpose": "Cu pillar body (post-passivation 3D aux)"},
+    "SnAgCap":         {"gds_layer": 501, "gds_datatype": 35, "material": "SnAg",   "purpose": "SnAg solder cap (3D aux)"},
+    "SolderBall":      {"gds_layer": 502, "gds_datatype": 36, "material": "SAC305", "purpose": "SAC305 solder ball (3D aux)"},
+    "VendorXBumpCu":   {"gds_layer": 510, "gds_datatype": 35, "material": "Cu",     "purpose": "VendorX microbump Cu post (demo, non-IHP)"},
+    "VendorXBumpCap":  {"gds_layer": 511, "gds_datatype": 35, "material": "SnAg",   "purpose": "VendorX microbump cap (demo, non-IHP)"}
+  },
+
+  "fab_anchors": {
+    "ihp_cupillar_anchor": {
+      "description": "IHP SG13G2 Cu-pillar UBM opening (fabricated by the interposer)",
+      "interposer_pdk": "interposer",
+      "adk_attachment_adapter": "intm4tm2",
+      "layers": {"passiv": "9/35", "dfpad": "41/35", "recog": "99/35"}
+    },
+    "ihp_sbump_anchor": {
+      "description": "IHP SG13G2 solder-bump UBM opening (fabricated by the interposer)",
+      "interposer_pdk": "interposer",
+      "adk_attachment_adapter": "intm4tm2",
+      "layers": {"passiv": "9/36", "dfpad": "41/36", "recog": "99/36"}
+    }
+  },
+
+  "methods": {
+    "cupillar_opt1": {
+      "description": "PacTech Cu Pillar, Table 6.1 Option 1 (35um opening)",
+      "vendor": "PacTech (IHP)",
+      "fab_anchor": "ihp_cupillar_anchor",
+      "body_diameter_um": 44,
+      "layers_3d": ["CuPillar", "SnAgCap"],
+      "connection_stack": {
+        "layers": [
+          {"name": "CuPillar", "material": "Cu",   "height": 28.0, "diameter": 44.0},
+          {"name": "SnAgCap",  "material": "SnAg", "height": 16.0, "diameter": 44.0}
+        ]
+      },
+      "fab_params": {"passiv_opening_um": 35.0, "tm2_enclosure_um": 7.5},
+      "pitch_rules": {"IXN_spacing": 40.0, "IXN_pitch": 75.0},
+      "adapter": "ihp_cupillar",
+      "stackup_fragment": "libs.tech/chiplet_studio/stackup_fragments/cupillar_opt1.stackup.yaml"
+    },
+
+    "cupillar_opt2": {
+      "description": "PacTech Cu Pillar, Table 6.1 Option 2 (40um opening)",
+      "vendor": "PacTech (IHP)",
+      "fab_anchor": "ihp_cupillar_anchor",
+      "body_diameter_um": 49,
+      "layers_3d": ["CuPillar", "SnAgCap"],
+      "connection_stack": {
+        "layers": [
+          {"name": "CuPillar", "material": "Cu",   "height": 32.0, "diameter": 49.0},
+          {"name": "SnAgCap",  "material": "SnAg", "height": 16.0, "diameter": 49.0}
+        ]
+      },
+      "fab_params": {"passiv_opening_um": 40.0, "tm2_enclosure_um": 7.5},
+      "pitch_rules": {"IXN_spacing": 40.0, "IXN_pitch": 80.0},
+      "adapter": "ihp_cupillar",
+      "stackup_fragment": "libs.tech/chiplet_studio/stackup_fragments/cupillar_opt2.stackup.yaml"
+    },
+
+    "cupillar_opt3": {
+      "description": "PacTech Cu Pillar, Table 6.1 Option 3 (45um opening)",
+      "vendor": "PacTech (IHP)",
+      "fab_anchor": "ihp_cupillar_anchor",
+      "body_diameter_um": 54,
+      "layers_3d": ["CuPillar", "SnAgCap"],
+      "connection_stack": {
+        "layers": [
+          {"name": "CuPillar", "material": "Cu",   "height": 42.0, "diameter": 54.0},
+          {"name": "SnAgCap",  "material": "SnAg", "height": 19.0, "diameter": 54.0}
+        ]
+      },
+      "fab_params": {"passiv_opening_um": 45.0, "tm2_enclosure_um": 7.5},
+      "pitch_rules": {"IXN_spacing": 50.0, "IXN_pitch": 95.0},
+      "adapter": "ihp_cupillar",
+      "stackup_fragment": "libs.tech/chiplet_studio/stackup_fragments/cupillar_opt3.stackup.yaml"
+    },
+
+    "sbump_sac305": {
+      "description": "PacTech SAC305 solder bump (80um ball)",
+      "vendor": "PacTech (IHP)",
+      "fab_anchor": "ihp_sbump_anchor",
+      "body_diameter_um": 80,
+      "layers_3d": ["SolderBall"],
+      "connection_stack": {
+        "layers": [
+          {"name": "SolderBall", "material": "SAC305", "height": 80.0, "diameter": 80.0}
+        ]
+      },
+      "fab_params": {"passiv_opening_um": 60.0, "tm2_enclosure_um": 10.0},
+      "pitch_rules": {"IXN_spacing": 70.0, "IXN_pitch": 130.0},
+      "adapter": "ihp_sbump",
+      "stackup_fragment": "libs.tech/chiplet_studio/stackup_fragments/sbump_sac305.stackup.yaml"
+    },
+
+    "vendorx_microbump": {
+      "description": "VendorX fine-pitch microbump (demo, non-IHP) on IHP interposer UBM",
+      "vendor": "VendorX Microsystems (DEMO / non-IHP)",
+      "fab_anchor": "ihp_cupillar_anchor",
+      "body_diameter_um": 40,
+      "layers_3d": ["VendorXBumpCu", "VendorXBumpCap"],
+      "connection_stack": {
+        "layers": [
+          {"name": "VendorXBumpCu",  "material": "Cu",   "height": 18.0, "diameter": 40.0},
+          {"name": "VendorXBumpCap", "material": "SnAg", "height": 6.0,  "diameter": 40.0}
+        ]
+      },
+      "fab_params": {"passiv_opening_um": 35.0, "tm2_enclosure_um": 7.5},
+      "pitch_rules": {"IXN_spacing": 15.0, "IXN_pitch": 50.0},
+      "adapter": "vendorx_microbump",
+      "stackup_fragment": "libs.tech/chiplet_studio/stackup_fragments/vendorx_microbump.stackup.yaml"
+    }
+  }
+}

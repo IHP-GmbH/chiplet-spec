@@ -1,0 +1,14 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: chiplet-spec
+Upstream-Contact: IHP GmbH
+Source: https://github.com/IHP-GmbH
+
+Files: *
+Copyright: 2026 IHP GmbH
+License: Apache-2.0
+
+Files: schemas/* examples/*
+Copyright: 2026 IHP GmbH
+License: Apache-2.0
+Comment: JSON/YAML data files cannot carry inline SPDX comment headers without
+ risking strict parsers; their license is declared here (REUSE DEP5).

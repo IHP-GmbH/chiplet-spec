@@ -1,0 +1,60 @@
+{
+  "schema": "adk-boundary-manifest",
+  "version": "1.0.0",
+  "generator": "blackbox_chiplet.py",
+  "assembly_gds": "acme_phy.gds",
+  "dbu_um": 0.001,
+  "top_cell": "ACME_PHY",
+  "boundaries": [
+    {
+      "instance": "ACME_PHY",
+      "source_die": "ACME_PHY",
+      "class": "chiplet",
+      "transform": {
+        "origin_um": [
+          0.0,
+          0.0
+        ],
+        "rotation_deg": 0.0,
+        "mirror_x": false,
+        "magnification": 1.0
+      },
+      "polygon_dbu": [
+        [
+          -1000000,
+          -750000
+        ],
+        [
+          1000000,
+          -750000
+        ],
+        [
+          1000000,
+          750000
+        ],
+        [
+          -1000000,
+          750000
+        ]
+      ],
+      "polygon_um": [
+        [
+          -1000.0,
+          -750.0
+        ],
+        [
+          1000.0,
+          -750.0
+        ],
+        [
+          1000.0,
+          750.0
+        ],
+        [
+          -1000.0,
+          750.0
+        ]
+      ]
+    }
+  ]
+}
