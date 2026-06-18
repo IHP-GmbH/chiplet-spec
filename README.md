@@ -21,13 +21,16 @@ anyone — open-source or commercial — can build independent implementations.
 | Path | Contents |
 |------|----------|
 | `docs/CHIPLET_FORMAT_SPEC.md` | The `.chiplet` YAML assembly format (v1.0). |
-| `docs/coord_frame_contract.md` | Canonical coordinate frames for `.chiplet` positions. |
-| `docs/interconnect_render_contract.md` | Stackup-fragment merge + 3D-body rendering contract. |
-| `docs/adapter_contract.md` | Required inputs/parameters for interposer & interconnect adapters. |
+| `docs/coord_frame_contract.md` | Canonical coordinate-frame, anchor, and z-mounting contract for `.chiplet` positions — every writer and reader must obey it. |
 | `schemas/*.schema.json` | Machine-readable JSON Schemas (boundary manifest, interconnect methods, layers, rule params, interconnect rules). |
 | `schemas/chiplet_pads.json` | Pad-layer vocabulary for black-box chiplets (GDS 205/0, 205/25, 206/0). |
 | `examples/` | Sample `.chiplet`, `*.boundaries.json`, and `interconnect_methods.json`. |
 | `reference/python/`, `reference/cpp/` | Dependency-clean reference reader/writer libraries (`chiplet-format-io`): Python (PyYAML only) and C++ (yaml-cpp only). Apache-2.0, with no GPL/Qt/KLayout dependency, so they embed in tools under any license. |
+
+Only **format-level** artifacts live here. Tool-specific *implementation* contracts —
+how Chiplet Studio merges stackup fragments and renders 3D bodies, or what inputs an ADK
+DRC adapter must declare — stay with their respective tools (chiplet-studio, adk), since
+they reference internal class names and CLI surfaces rather than the format itself.
 
 ## License and implementer rights
 
