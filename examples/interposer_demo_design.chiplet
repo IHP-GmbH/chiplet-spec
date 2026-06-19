@@ -1,41 +1,88 @@
-format_version: '1.0'
+# Illustrative canonical .chiplet assembly.
+#
+# A two-die, mixed-interconnect assembly on an IHP IntM4TM2 interposer: U1 seats
+# on an IHP Cu-pillar stack, U2 on a (non-IHP) vendor microbump, so the two dies
+# land at different heights from the same per-die z-mounting rule.
+#
+# All positions follow docs/coord_frame_contract.md: interposer-local,
+# GDS-bbox-corner of the interposer top_cell, y-up, micrometers; `position:` is
+# the component's geometric center. Values mirror the documented demo in that
+# contract (sections 2.3 and 3.2). Paths are relative placeholders.
+format_version: "1.0"
+
 assembly:
-  name: interposer_template
+  name: "IntM4TM2 mixed-method demo (illustrative)"
+  description: "Two SG13G2 dies on an IntM4TM2 interposer; mixed interconnect methods"
   units: um
+
 technologies:
   intm4tm2:
-    description: Imported from KiCad
-    layer_properties: /home/montanares/git/heterogenic_chip_design_project/interposer/libs.tech/klayout/tech/intm4tm2.lyp
+    description: "IHP 130nm IntM4TM2 aluminium BEOL interposer"
+    layer_properties: ./tech/intm4tm2.lyp
     dbu: 0.001
   sg13g2:
-    description: Imported from KiCad
-    layer_properties: /home/montanares/git/heterogenic_chip_design_project/interposer/klayout/tech/sg13g2.lyp
+    description: "IHP SG13G2 130nm BiCMOS die"
+    layer_properties: ./tech/sg13g2.lyp
     dbu: 0.001
+
+# Interconnect stacks the dies mount on. total_height drives z-mounting; the
+# mounting surface (the interposer's attachment_surface_z, 13.83 um here) comes
+# from the interposer stackup, so the dies' z is given explicitly below.
+connection_stacks:
+  cupillar_opt1:
+    description: "IHP Cu pillar (CuPillar 28 + SnAgCap 16 = 44 um)"
+    layers:
+      - {name: CuPillar, material: Cu,   height: 28.0, diameter: 44.0}
+      - {name: SnAgCap,  material: SnAg, height: 16.0, diameter: 44.0}
+  vendorx_microbump:
+    description: "VendorX microbump, non-IHP (Cu 18 + cap 6 = 24 um)"
+    layers:
+      - {name: VendorXBumpCu,  material: Cu,   height: 18.0, diameter: 40.0}
+      - {name: VendorXBumpCap, material: SnAg, height: 6.0,  diameter: 40.0}
+
 components:
-- id: interposer
-  type: interposer
-  technology: intm4tm2
-  layout: /home/montanares/git/heterogenic_chip_design_project/kicad_designs/kicad_interposer_hyperlynx_to_gds/chiplet_files/interposer.gds
-  top_cell: TOP
-  dimensions:
-    width: 0.0
-    height: 0.0
-    thickness: 1560.0
-  position:
-    x: 0.0
-    y: 0.0
-    z: 0.0
-- id: REF**
-  type: die
-  technology: sg13g2
-  layout: /home/montanares/git/heterogenic_chip_design_project/gds_to_kicad_footprint/gds_files/Interposer_ANT_CuPi.gds
-  dimensions:
-    width: 1540.0
-    height: 3740.0
-    thickness: 0.0
-  position:
-    x: 159103.28
-    y: -101432.6
-    z: 1560.0
-  rotation:
-    z: 0.0
+  - id: interposer
+    type: interposer
+    technology: intm4tm2
+    anchor: bbox_center
+    layout: ./gds/interposer.gds
+    top_cell: INTERPOSER
+    position: {x: 3246.156, y: 2801.000, z: 0.0}      # full GDS-bbox center
+    dimensions: {width: 6492.312, height: 5602.001, thickness: 13.83}
+    io_pads:
+      - id: J1
+        io_class: wire_bond
+        net: VDD
+        position: {x: 100.0, y: 100.0}
+        size: {x: 80.0, y: 80.0}
+        layer: TopMetal2
+      - id: J2
+        io_class: wire_bond
+        net: GND
+        position: {x: 6392.0, y: 5502.0}
+        size: {x: 80.0, y: 80.0}
+        layer: TopMetal2
+
+  - id: U1
+    type: die
+    technology: sg13g2
+    anchor: gds_origin
+    orientation: flip_chip
+    connection: cupillar_opt1                          # IHP Cu pillar
+    layout: ./gds/Metal_Test.gds
+    top_cell: Metal_Test
+    position: {x: 1954.121, y: 2332.483, z: 57.83}     # 13.83 + 44 (cupillar_opt1)
+    dimensions: {width: 730.0, height: 2566.339, thickness: 0.0}
+    rotation: {z: 0.0}
+
+  - id: U2
+    type: die
+    technology: sg13g2
+    anchor: gds_origin
+    orientation: flip_chip
+    connection: vendorx_microbump                      # non-IHP vendor microbump
+    layout: ./gds/vendor_die.gds
+    top_cell: VENDOR_DIE
+    position: {x: 5170.23, y: 2420.27, z: 37.83}       # 13.83 + 24 (vendorx_microbump)
+    dimensions: {width: 730.0, height: 2566.339, thickness: 0.0}
+    rotation: {z: 0.0}

@@ -32,6 +32,34 @@ how Chiplet Studio merges stackup fragments and renders 3D bodies, or what input
 DRC adapter must declare — stay with their respective tools (chiplet-studio, adk), since
 they reference internal class names and CLI surfaces rather than the format itself.
 
+## Scope and relationship to other standards
+
+`.chiplet` is a **physical-assembly layout** format: it places dies, interposers,
+and substrates in one shared coordinate frame, z-mounts each die on its chosen
+interconnect, and feeds an assembly DRC flow. It does **not** describe a chiplet
+as IP — no electrical, functional, power, thermal, PHY/D2D-protocol, or test
+characterization. That is a different layer of the stack, and the ecosystem
+already has a standard heading toward it:
+
+- **CDXML** (Chiplet Data Exchange in XML), the per-chiplet datasheet — pinout,
+  mechanical envelope, electrical/ESD ratings, D2D interface type. It was
+  developed in **OCP / ODSA** (published under CC0-1.0); its capabilities were
+  folded into **JEDEC's JEP30** PartModel, a separate JEDEC standard that is now
+  the active vehicle for this part-model data. By its own scope CDXML carries no
+  inter-die placement (its only coordinates are pad positions *within* a single
+  part).
+
+So the two are **complementary layers, not competitors**: CDXML / JEP30 describes
+*what a part is*; `.chiplet` describes *where it is placed, how it is z-mounted,
+and how the assembly is verified*. The intended pipeline is **select (CDXML / JEP30)
+→ place (`.chiplet`) → assembly DRC**. A `.chiplet` `die` may carry an optional
+`cdxml_ref` citing the part it instantiates, so an assembly *references* part
+data rather than duplicating it (see
+[`docs/CHIPLET_FORMAT_SPEC.md`](docs/CHIPLET_FORMAT_SPEC.md)). `.chiplet` aims to
+serve as an open interchange for the **physical-assembly + DRC** layer, downstream
+of and interoperable with the part-description standards — not a competing
+"chiplet exchange format" writ large.
+
 ## License and implementer rights
 
 All artifacts in this repository are licensed under the **Apache License 2.0**
