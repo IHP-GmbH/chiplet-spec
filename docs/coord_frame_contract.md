@@ -8,13 +8,24 @@ SPDX-FileCopyrightText: 2026 IHP GmbH
 **Status:** canonical, part of the chiplet-spec format definition.
 **Companion:** [`CHIPLET_FORMAT_SPEC.md`](./CHIPLET_FORMAT_SPEC.md)
 (general schema; this doc adds frame and anchor semantics).
-**Reference implementations:** the reader is `chiplet-studio`
-(`src/formats/ChipletFormat.*`, a thin consumer over the vendored
-`chiplet_format_io` library); the writers are KiCad's `export_chiplet.cpp`,
-`chiplet_kicad_plugin/hyp_to_gds.py`, and `gds_to_kicad`. Paths of the form
-`chiplet-studio/...`, `kicad/...`, `chiplet_kicad_plugin/...`, `gds_to_kicad/...`
-below name those reference tools, illustrating how the contract is met; they
-are not part of the format itself.
+**Worked example:** [`examples/interposer_demo_design.chiplet`](../examples/interposer_demo_design.chiplet),
+a self-contained instance of the frame, anchor, and z conventions
+described here (mirrors sections 2.3 and 3.2).
+**Reference libraries:** the repo-local, dependency-clean reference
+reader/writer is `chiplet-format-io` (`reference/python/chiplet_format_io`,
+`reference/cpp/`, Apache-2.0). These libraries are deliberately
+**structural-only**: they parse, validate, and round-trip the schema (the
+`format_version` gate, the intermediate-file guard, structural shape) and keep
+`anchor:` as a raw string, but they do **not** implement the anchor defaulting,
+the 1e5 range check, mesh centering, or z-mounting. Those frame semantics are a
+consumer responsibility; this contract defines them, and the `chiplet-studio`
+reference implementation (`src/formats/ChipletFormat.*` over a vendored copy of
+the C++ library, plus `src/core/Assembly.cpp`, `src/view3d/LayerMeshBuilder.cpp`,
+`src/view3d/AssemblyView.cpp`) demonstrates them. The writers are KiCad's
+`export_chiplet.cpp`, `chiplet_kicad_plugin/hyp_to_gds.py`, and `gds_to_kicad`.
+Paths of the form `chiplet-studio/...`, `kicad/...`, `chiplet_kicad_plugin/...`,
+`gds_to_kicad/...` below name those downstream reference tools, illustrating how
+the contract is met; they are not part of the format itself.
 
 The problem this contract solves: a `.chiplet` file carries XY positions
 that originate in several different coordinate frames (KiCad PCB, Hyperlynx,
@@ -437,6 +448,13 @@ Every tool that reads a `.chiplet` file MUST:
    any `position.x` or `position.y` exceeds 1e5 um (heuristic
    indicator of HYP-absolute leakage).
 
+The repo-local reference libraries (`reference/cpp`, `reference/python`) do
+**not** satisfy these reader requirements on their own: they are structural-only
+(see the header), so they parse and round-trip `anchor:` as a raw string but
+perform no anchor defaulting, no 1e5 range check, and no z-mounting. A reader
+that needs the full contract must add the frame semantics on top, as the
+`chiplet-studio` reference implementation does in the sub-sections below.
+
 ### 5.1 `chiplet-studio/src/formats/ChipletFormat.cpp`
 
 `ChipletFormat::load` delegates parsing and structural validation to the
@@ -700,9 +718,15 @@ in `.chiplet` files.
 - [`CHIPLET_FORMAT_SPEC.md`](./CHIPLET_FORMAT_SPEC.md), general
   schema (companion document; this doc adds frame and anchor
   semantics).
+- [`examples/interposer_demo_design.chiplet`](../examples/interposer_demo_design.chiplet),
+  the canonical worked example: a runnable two-die mixed-method
+  assembly whose positions, anchors, and z values mirror sections 2.3
+  and 3.2 of this contract.
 - Reference reader/writer library: `reference/python/` and
   `reference/cpp/` (chiplet-format-io, Apache-2.0). chiplet-studio
-  consumes a vendored copy of the C++ library.
+  consumes a vendored copy of the C++ library. These libraries are
+  structural-only; see the header and section 5 for the consumer/library
+  split on frame semantics.
 
 ---
 
@@ -713,3 +737,4 @@ in `.chiplet` files.
 | 1.0 | 2026-05-07 | Mauricio Montanares | Initial contract. Adopted GDS-bbox-corner as canonical frame; explicit `anchor:` field per component; Z-mounting formal definition; verification fixtures spec. |
 | 1.1 | 2026-06-18 | Mauricio Montanares | Updated to the two-die mixed-method demo (U1 cupillar_opt1 z=57.83, U2 vendorx_microbump z=37.83); documented per-die fragment merge in calculate_component_z; corrected interposer technology to intm4tm2 and demo dimensions; moved finalizer/check paths to chiplet_kicad_plugin/; noted intermediate-file guard now lives in the vendored chiplet_format_io library; removed em-dashes. |
 | 1.2 | 2026-06-18 | Mauricio Montanares | Relocated to chiplet-spec as the canonical, permissive (Apache-2.0) home, re-synced from the chiplet-studio copy; chiplet-studio now points here. Reframed as a format-level contract whose `chiplet-studio/...`, `kicad/...`, `gds_to_kicad/...` paths denote reference implementations. |
+| 1.3 | 2026-06-19 | Mauricio Montanares | Named the repo-local `chiplet-format-io` libraries (`reference/cpp`, `reference/python`) as the primary reference and made explicit that they are structural-only, with the frame/anchor/z semantics owned by consumers and demonstrated by chiplet-studio (header and section 5). Cross-referenced the in-repo worked example `examples/interposer_demo_design.chiplet`. |

@@ -20,7 +20,7 @@ library makes that practical in C++ without dragging in the copyleft host tools.
   under any license. A test asserts the sources stay free of those.
 - **Plain structs.** `load()` returns a `ChipletDocument` tree of plain value
   structs (`include/chiplet_format_io/chiplet_format_io.hpp`). Paths are kept
-  verbatim — the library never touches the filesystem to resolve them; that is
+  verbatim; the library never touches the filesystem to resolve them; that is
   the consumer's job.
 - **Semantic, not byte-exact.** This is an independent reference. It is *not*
   the byte-exact writer used inside the GPL host tools (the KiCad plugin / KiCad
@@ -48,9 +48,10 @@ by throwing `cfio::ChipletFormatError`.
 
 Validation strictness matches the C++ host reader it can replace: missing
 `component.id`/`type`, missing `interface.id`/`type`, an unknown interface type,
-and a missing `net.name` are always rejected during parsing; `validate=false`
-relaxes only the document-level gate (`format_version` value, the
-`finalize_required` intermediate guard, and `assembly.name`).
+and a missing `net.name` are always rejected during parsing. `validate=false`
+relaxes only the document-level gate, which checks a missing `format_version`
+key, a wrong `format_version` value, the `finalize_required` intermediate guard,
+a missing or non-map `assembly` section, and a missing `assembly.name`.
 
 ## Build & test
 

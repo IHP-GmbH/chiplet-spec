@@ -23,7 +23,7 @@ The `.chiplet` format is a YAML-based specification for describing 3D chiplet pa
 `.chiplet` is a **physical-assembly layout** format. It answers *where each die,
 interposer, and substrate sits in one shared coordinate frame, how each die is
 z-mounted onto its interconnect, and which GDS/OASIS body and layer properties
-each component carries* — the inputs an assembly viewer and an assembly DRC flow
+each component carries*; the inputs an assembly viewer and an assembly DRC flow
 need. It is the interchange pivot between PCB-style design entry and a 3D
 assembly/DRC environment.
 
@@ -33,10 +33,10 @@ power, thermal, PHY/D2D-protocol, or test characterization. Those belong to a
 part-description standard. The chiplet ecosystem already has one heading toward
 that role:
 
-- **CDXML** (Chiplet Data Exchange in XML) — a per-chiplet, machine-readable
+- **CDXML** (Chiplet Data Exchange in XML), a per-chiplet, machine-readable
   datasheet: pinout, mechanical envelope, electrical/ESD ratings, and D2D
   interface type. It was developed in **OCP / ODSA** and published under
-  CC0-1.0, and its capabilities were folded into **JEDEC's JEP30** PartModel —
+  CC0-1.0, and its capabilities were folded into **JEDEC's JEP30** PartModel,
   a separate JEDEC standard that is now the active vehicle for this part-model
   data. CDXML describes *what a chiplet is*; by its own scope it carries no
   inter-die placement (its only coordinates are pad positions *within* a single
@@ -44,14 +44,14 @@ that role:
 
 The two formats are **complementary layers of one flow**, not competitors:
 
-| | Part description (CDXML → JEP30) | `.chiplet` |
+| | Part description (CDXML -> JEP30) | `.chiplet` |
 |---|---|---|
 | Answers | *what is this part* (datasheet) | *placed where, z-mounted how, DRC-ready* (assembly) |
 | Coordinates | per-pin pad x/y within one die | per-component placement in a shared interposer frame |
 | Stage | part selection / sourcing | physical assembly + DRC |
 
-A natural pipeline is: select a part described by CDXML / JEP30 → place and
-z-mount it in a `.chiplet` assembly → run assembly DRC. To make that handoff
+A natural pipeline is: select a part described by CDXML / JEP30 -> place and
+z-mount it in a `.chiplet` assembly -> run assembly DRC. To make that handoff
 explicit, a `.chiplet` component may carry an optional
 [`cdxml_ref`](#cdxml_ref-proposed-extension) that cites the part it instantiates,
 so the assembly *references* a part's IP data rather than re-describing it. The
@@ -60,19 +60,22 @@ CDXML / JEP30, placement in `.chiplet`.
 
 ## File Structure
 
-A `.chiplet` file contains four top-level sections:
+A `.chiplet` file always carries `format_version` and an `assembly` block; every
+other top-level block is optional. The reference reader recognizes ten
+top-level keys in total (the full list, with required/optional status, is the
+[Root Level Keys](#root-level-keys) table below). The most common skeleton is:
 
 ```yaml
-format_version: "1.0"
+format_version: "1.0"   # required
 
-assembly:
-  # Assembly metadata (required)
+assembly:               # required
+  # Assembly metadata
 
-technologies:
-  # Technology definitions (optional)
+technologies:           # optional
+  # Technology definitions
 
-components:
-  # Component list (optional)
+components:              # optional
+  # Component list
 ```
 
 ---
@@ -186,7 +189,7 @@ The `components` section is an array of component definitions. Each component re
 | `cells` | NO | String or Array | - | One or more cell names in the layout. `top_cell` is the single-cell shorthand; writers emit `top_cell` for one cell and `cells` for several. |
 | `position` | NO | Object | `{x:0, y:0, z:0}` | 3D position of the component's **geometric center**, in the canonical frame (see [Coordinate frame](#coordinate-frame-anchor-and-z-mounting-normative)). |
 | `rotation` | NO | Object | `{z:0}` | Rotation angles |
-| `orientation` | NO | String | `""` | Mounting orientation of a die, e.g. `flip_chip`. (`die` / `die_array`.) |
+| `orientation` | NO | String | `face_up` | Mounting orientation of a die: `face_up`, `flip_chip`, or `face_down`. Absent is treated as `face_up`. (`die` / `die_array`.) |
 | `connection` | NO | String | `""` | Interconnect method id this die mounts on (e.g. `cupillar_opt1`); references an entry in the interconnect method registry (`interconnect_methods.json`). Drives per-die z-mounting (contract section 3). (`die` / `die_array`.) |
 | `dimensions` | NO | Object | `{width:0, height:0, thickness:0}` | Physical size |
 | `io_pads` | NO | Array | `[]` | Assembly-level I/O pads (e.g. wire-bond pads), nested under the `interposer`. See [io_pads](#io_pads-interposer-only). |
@@ -275,14 +278,22 @@ Summary of what the contract fixes:
   mix methods. A die with no `connection:` falls back to the interposer
   thickness (contract section 3).
 - **Leak guard.** A reader MUST warn (or reject) when `|position.x|` or
-  `|position.y|` exceeds `1e5` um — a heuristic that absolute (un-converted)
+  `|position.y|` exceeds `1e5` um, a heuristic that absolute (un-converted)
   coordinates have leaked through.
 
 ### orientation (die / die_array)
 
-Optional string describing how a die is mounted, e.g. `flip_chip`. It records
-the assembly intent; the geometric effect of mirroring is realized by the
-writer when it emits the layout (e.g. `gds_to_kicad --flip-chip` mirrors X).
+Optional string describing how a die is mounted. The reference reader treats it
+as a canonical-string field with three recognized values: `face_up` (the
+default), `flip_chip`, and `face_down`. An absent `orientation` is treated as
+`face_up` downstream, and the reference C++ writer suppresses `face_up` on
+output (it emits `orientation` only when the value is non-empty and not
+`face_up`). The reader does not reject other strings, but writers should stay
+within this vocabulary.
+
+`orientation` records the assembly intent; the geometric effect of mirroring is
+realized by the writer when it emits the layout (e.g. `gds_to_kicad
+--flip-chip` mirrors X).
 
 ### io_pads (interposer only)
 
@@ -592,8 +603,8 @@ consuming tool.
 1. `format_version` must be `"1.0"`.
 2. `assembly.name` is required and must not be empty.
 3. Every component has a non-empty `id` and a non-empty `type`.
-4. Every `interfaces[]` entry has an `id` and a `type`, and the `type` is one of `micro_bump`, `copper_pillar`, `tsv`, `wire_bond` (an unknown type is rejected).
-5. Every `netlist.nets[]` entry has a `name`.
+4. Every `interfaces[]` entry has an `id` and a `type`, and the `type` is one of `micro_bump`, `copper_pillar`, `tsv`, `wire_bond` (an unknown type is rejected). *C++ reference only; the Python reference validator does not check the interface-type vocabulary and accepts an unknown type.*
+5. Every `netlist.nets[]` entry has a `name`. *C++ reference only; the Python reference validator does not check this and accepts a nameless net.*
 6. A file whose top-level `_metadata.finalize_required` is `true` is refused unless intermediate files are explicitly allowed (it is not yet in the canonical frame; run the named `finalizer`).
 
 **Reader behavior (warnings / fallbacks, not hard errors):**
@@ -717,7 +728,7 @@ components:
     type: "<die|die_array|interposer|substrate>"
     technology: "<TECH_ID>"
     anchor: "<gds_origin|bbox_center>"
-    orientation: "<flip_chip|>"        # dies only
+    orientation: "<face_up|flip_chip|face_down>"   # dies only; default face_up
     connection: "<INTERCONNECT_METHOD_ID|>"   # dies only; drives z-mounting
     layout: "<PATH_TO_GDS>"
     top_cell: "<CELL_NAME>"
@@ -743,3 +754,4 @@ components:
 |---------|------|---------|
 | 1.0 | 2024-01 | Initial specification |
 | 1.0 | 2026-06-19 | Documentation reconciled with the reference libraries and [`coord_frame_contract.md`](./coord_frame_contract.md). Documented previously-undocumented parts of the existing `format_version` 1.0 schema: `assembly.assembly_gds`/`io_technology`, component `anchor`/`orientation`/`connection`/`cells`/`io_pads`, geometric-center `position` semantics, the per-die z-mounting rule, the `_metadata` intermediate-file guard, and the top-level `connection_stacks`, `interconnect`, `interfaces`, `netlist`, and `flow` blocks. Reorganized Validation Rules into reference-enforced vs consumer-level. Added a "Scope and relationship to other standards" section (CDXML / OCP-ODSA / JEDEC JEP30) and a proposed, non-normative `cdxml_ref` extension. No on-disk format change; `format_version` stays `"1.0"`. |
+| 1.0 | 2026-06-19 | Editorial pass: aligned the File Structure skeleton with the Root Level Keys table (one required `assembly` block plus optional blocks; ten recognized keys), documented the full `orientation` vocabulary (`face_up`/`flip_chip`/`face_down`, `face_up` default and writer suppression) to match the reference, and removed non-ASCII dashes. No normative change. |
