@@ -3,12 +3,31 @@ SPDX-License-Identifier: Apache-2.0
 SPDX-FileCopyrightText: 2026 IHP GmbH
 -->
 
-# Coordinate Frame Contract — Chiplet Pipeline
+# Coordinate Frame Contract, Chiplet Pipeline
 
-**Owner:** chiplet-studio (reader and contract owner); all writers cite
-this document by path.
+**Status:** canonical, part of the chiplet-spec format definition.
 **Companion:** [`CHIPLET_FORMAT_SPEC.md`](./CHIPLET_FORMAT_SPEC.md)
-(general schema — this doc adds frame and anchor semantics).
+(general schema; this doc adds frame and anchor semantics).
+**Reference implementations:** the reader is `chiplet-studio`
+(`src/formats/ChipletFormat.*`, a thin consumer over the vendored
+`chiplet_format_io` library); the writers are KiCad's `export_chiplet.cpp`,
+`chiplet_kicad_plugin/hyp_to_gds.py`, and `gds_to_kicad`. Paths of the form
+`chiplet-studio/...`, `kicad/...`, `chiplet_kicad_plugin/...`, `gds_to_kicad/...`
+below name those reference tools, illustrating how the contract is met; they
+are not part of the format itself.
+
+The problem this contract solves: a `.chiplet` file carries XY positions
+that originate in several different coordinate frames (KiCad PCB, Hyperlynx,
+GDS), and a die placed in the wrong frame lands tens or hundreds of microns
+off its pads. Six alignment incidents traced back to exactly this. This
+document pins one canonical frame, makes every writer convert into it, and
+makes every reader fail loudly when something leaks through un-converted.
+
+Any tool may implement this contract under any license; it is the
+format-level companion to the `.chiplet` schema, not specific to one
+implementation. In the reference toolchain the contract tests
+(`test_coord_frame_contract.cpp`, `test_chiplet_format*.cpp` in chiplet-studio)
+are the regression net that proves the behavior described here.
 
 ---
 
@@ -19,19 +38,20 @@ this document by path.
    units micrometers.
 2. `position:` is the component's **geometric center**, not its corner.
 3. Each component declares an explicit `anchor:` field:
-   - `anchor: gds_origin` — the component mesh is built around its own
+   - `anchor: gds_origin`, the component mesh is built around its own
      GDS (0,0). Used by dies produced by `gds_to_kicad`.
-   - `anchor: bbox_center` — the component mesh is centered on its own
+   - `anchor: bbox_center`, the component mesh is centered on its own
      GDS bounding box. Used by interposers.
 4. Z-mounting for dies on connection stacks is fixed by the formula
-   in §3.
+   in section 3. It is **per-die**: each die's `connection:` selects its
+   own bump/pillar bodies, so one assembly can mix methods (section 3.2).
 5. `hyp_to_gds.py --update-chiplet-file` is **mandatory** in the
    canonical path. KiCad's `pcbnew` GUI export produces an
    intermediate `.chiplet` whose positions live in the wrong frame
    (PCB-bbox-corner) and is not directly consumable by chiplet-studio.
 6. Interposer `dimensions:` are the **board outline** (prBoundary
    189/0, drawn from KiCad Edge.Cuts) when present in the GDS;
-   `position:` stays the full-GDS-bbox center (§1.5).
+   `position:` stays the full-GDS-bbox center (section 1.5).
 
 Any tool that writes a `.chiplet` file MUST conform to this contract.
 Any tool that reads one MUST validate that the contract is followed
@@ -51,7 +71,7 @@ The canonical frame for `.chiplet` `position:` values is:
 | Origin (0, 0) | Lower-left corner of the interposer's GDS bbox |
 | X axis | Increases rightward |
 | Y axis | Increases upward (y-up cartesian) |
-| Units | Micrometers (µm) |
+| Units | Micrometers (um) |
 | Float precision | At least 6 decimal places (1 pm theoretical) |
 
 ### 1.2 Why GDS-bbox-corner
@@ -63,13 +83,13 @@ The canonical frame for `.chiplet` `position:` values is:
   bbox.
 - The PCB Edge.Cuts bounding box (which KiCad uses natively) **does
   not always match** the GDS bbox. Historically the wire-bond demo
-  carried a hidden shift of (-200 µm, -780 µm) between the two frames
-  even though widths and heights agreed to the µm. The GDS frame is
+  carried a hidden shift of (-200 um, -780 um) between the two frames
+  even though widths and heights agreed to the um. The GDS frame is
   the only one with no such hidden shift relative to what gets
   fabricated.
-- Since the converter draws the board outline (Edge.Cuts → prBoundary
+- Since the converter draws the board outline (Edge.Cuts to prBoundary
   189/0) into the interposer GDS, the GDS bbox *contains* the outline.
-  When all drawn geometry sits inside the outline — the normal case —
+  When all drawn geometry sits inside the outline, the normal case,
   the canonical origin coincides with the board outline's lower-left
   corner, and the historical shift above is zero by construction.
 
@@ -94,19 +114,19 @@ The canonical frame for `.chiplet` `position:` values is:
 
 `(0,0)` is the lower-left of the interposer's GDS bbox. Every
 `position:` x and y in the .chiplet is measured from this corner,
-y-up, in µm.
+y-up, in um.
 
 ### 1.4 Position semantics
 
 `position:` always refers to the component's **geometric center**.
 
-For a die of width 1000 µm and height 2000 µm placed with its
+For a die of width 1000 um and height 2000 um placed with its
 lower-left corner at (250, 250) inside the interposer:
 ```yaml
 position:
   x: 750.0      # 250 + 1000/2
   y: 1250.0     # 250 + 2000/2
-  z: 61.83      # see §3 for Z mounting
+  z: 57.83      # see section 3 for Z mounting
 dimensions:
   width: 1000.0
   height: 2000.0
@@ -120,18 +140,18 @@ questions and have different sources:
 
 | Field | Source | Meaning |
 |---|---|---|
-| `dimensions: width/height` | bbox of prBoundary 189/0 (the board outline, drawn from KiCad Edge.Cuts) when the layer is present; bbox of all drawn geometry otherwise (legacy GDS) | The fab extent of the interposer — what viewers render as the substrate body |
-| `position: x/y` | half of the **full** GDS bbox (all layers, outline included) | Where the mesh bbox center sits in the canonical frame (`anchor: bbox_center`, §2) |
+| `dimensions: width/height` | bbox of prBoundary 189/0 (the board outline, drawn from KiCad Edge.Cuts) when the layer is present; bbox of all drawn geometry otherwise (legacy GDS) | The fab extent of the interposer, what viewers render as the substrate body |
+| `position: x/y` | half of the **full** GDS bbox (all layers, outline included) | Where the mesh bbox center sits in the canonical frame (`anchor: bbox_center`, section 2) |
 
 When the outline contains all drawn geometry, the full bbox equals
 the outline bbox and both fields describe the same rectangle. When
-copper leaks outside the outline (a design error — the converter
+copper leaks outside the outline (a design error; the converter
 warns loudly at export), `dimensions` keeps the true board size
 while `position` follows the mesh center, preserving die/pillar
 registry in the render at the cost of a shifted substrate body.
 
 The reader uses `position` and `dimensions` together to compute the
-3D world placement (see §5).
+3D world placement (see section 5).
 
 ---
 
@@ -158,41 +178,46 @@ If `anchor:` is absent:
   auto-migration.
 - New files MUST declare `anchor:` explicitly.
 
-### 2.3 Example
+### 2.3 Example (from the wire-bond demo)
+
+The canonical demo interposer uses `intm4tm2` (the IHP IntM4TM2
+interposer stackup; `configs/stackups/intm4tm2.yaml`). Numbers below are
+the live values from
+`kicad_designs/interposer_wire_bonding_demo/interposer_wire_bonding_demo.chiplet`.
 
 ```yaml
 components:
   - id: interposer
     type: interposer
-    technology: interposer_tech
+    technology: intm4tm2
     anchor: bbox_center
-    layout: ./interposer.gds
-    top_cell: TOP
+    layout: interposer_wire_bonding_demo_interposer.gds
+    top_cell: INTERPOSER
     position:
-      x: 1750.0      # half of GDS bbox width (= outline width when
-      y: 2800.0      #   all geometry is on-board, see §1.5)
-      z: 0
+      x: 3246.156      # half of full GDS bbox width (= outline width
+      y: 2801.000      #   when all geometry is on-board, see section 1.5)
+      z: 0.0
     dimensions:
-      width: 3500.0  # board outline (prBoundary 189/0), see §1.5
-      height: 5600.0
+      width: 6492.312  # board outline (prBoundary 189/0), see section 1.5
+      height: 5602.001
       thickness: 13.83
 
   - id: U1
     type: die
     technology: sg13g2
     anchor: gds_origin
-    connection: cupillar_opt2
+    connection: cupillar_opt1   # per-die method; see section 3.2
     orientation: flip_chip
-    layout: ./Metal_Test.gds
+    layout: ${GDS_TO_KICAD_ROOT}/.../Metal_Test.gds
     top_cell: Metal_Test
     position:
-      x: 1954.124    # die center in interposer-local frame
-      y: 2330.481
-      z: 61.83       # see §3
+      x: 1954.121     # die center in interposer-local frame
+      y: 2332.483
+      z: 57.83        # 13.83 + 44 (cupillar_opt1), see section 3
     dimensions:
-      width: 770.0
-      height: 2606.339
-      thickness: 0
+      width: 730.0
+      height: 2566.339
+      thickness: 0.0
 ```
 
 ---
@@ -202,7 +227,7 @@ components:
 ### 3.1 Formula
 
 For dies that mount on a connection stack (cu-pillar, solder bump,
-etc.):
+microbump):
 
 ```
 z_die = mounting_surface + connection.total_height()
@@ -210,72 +235,101 @@ z_die = mounting_surface + connection.total_height()
 
 where:
 - `mounting_surface` = `z_bottom` of the interposer stackup layer
-  whose name matches the connection stack's first layer.
+  whose name matches the connection stack's first layer, after the
+  interconnect-PDK fragment for this die's `connection:` is merged in
+  (see section 3.2).
 - `connection.total_height()` = sum of `height` for every layer in
   the connection stack.
 
-### 3.2 Worked example (wire-bond demo)
+### 3.2 Worked example, two-die mixed-method demo
 
-Interposer technology: `interposer_tech` (IHP SG13G2 BEOL).
-Die connection: `cupillar_opt2` (PacTech, two layers: CuPillar 32 µm
-+ SnAgCap 16 µm = total 48 µm).
+The canonical demo is a **two-die, mixed-method** assembly: U1 seats on an
+IHP cu-pillar stack and U2 on a non-IHP vendor microbump, both finalized in
+one export. The method is **per-die**: each die's `connection:` id selects
+its own interconnect-PDK fragment, so the dies seat at different heights from
+the same `calculate_component_z`.
 
-`cupillar_opt2.layers[0].name` = `CuPillar`. The interposer stackup
-contains a layer named `TopMetal2` whose `z_bottom = 13.83`. The
-connection stack physically attaches to TopMetal2.
+Interposer technology: `intm4tm2`. Its stackup declares
+`attachment_surface_z: 13.83` (the TopMetal2 top through the passivation
+opening; `configs/stackups/intm4tm2.yaml`).
 
-The connection stack's first layer name (`CuPillar`) does not appear
-in the interposer stackup — the common case for visualization-only
-stacks. The lookup then falls back as follows:
+How the mounting surface resolves (`Assembly::calculate_component_z`,
+`src/core/Assembly.cpp`):
 
 ```
-1. Look up cupillar_opt2.layers[0].name = "CuPillar" in interposer
-   stackup. NOT FOUND.
-2. Fallback: use the interposer's physical thickness as the mounting
-   surface, OR — in the chiplet-studio implementation — the
-   stackup's last "real" layer top (TopMetal2, z_top = 13.83).
-3. mounting_surface = 13.83.
-4. z_die = 13.83 + 48 = 61.83 µm.
+1. Take this die's connection id, e.g. cupillar_opt1.
+2. Load the interposer stackup (intm4tm2) and MERGE the interconnect
+   fragment for that connection id
+   (interconnect_pdk/libs.tech/chiplet_studio/stackup_fragments/
+    cupillar_opt1.stackup.yaml). The fragment declares
+    z_reference: attachment_surface, so its CuPillar layer (local z 0.00)
+    is offset by the stackup's attachment_surface_z (13.83). After merge,
+    CuPillar.z_bottom = 13.83.
+3. firstLayerName = connection.layers[0].name = "CuPillar". Look it up
+   in the merged stackup. FOUND. mounting_surface = 13.83.
+4. z_die = 13.83 + total_height(cupillar_opt1).
 ```
+
+Per-die totals in the demo:
+
+| Die | connection | stack layers | total_height | z_die |
+|---|---|---|---|---|
+| U1 | `cupillar_opt1` (IHP cu-pillar) | CuPillar 28 + SnAgCap 16 | 44 | 57.83 |
+| U2 | `vendorx_microbump` (non-IHP) | VendorXBumpCu 18 + VendorXBumpCap 6 | 24 | 37.83 |
+
+U1 selects Option 1 (not Option 2) because its pad ring has a 79.93 um-pitch
+pair, legal at Option 1's 75 um minimum but below Option 2's 80 um. That
+selection lives in the die's footprint `CONNECTION` field and rides through
+the export; the contract tests `U1Position` / `U2Position` are the regression
+witness.
 
 ### 3.3 Reference implementation
 
 `chiplet-studio/src/core/Assembly.cpp::calculate_component_z`.
 
+The fragment merge happens via
+`stackup.mergeInterconnectFragments(LayerStackup::resolveInterconnectKeys({comp->connection()}, ...))`
+before the first-layer lookup, so a die using any method seats on that
+method's body heights even when sibling dies use other methods.
+
 ```cpp
 // Mounting surface = z_bottom of the chosen connection stack's first
 // layer (the layer that physically attaches to the interposer pad,
-// e.g. CuPillar for cu-pillar stacks). Looking it up in the
-// interposer stackup gives the exact passivation-opening / pad-top
-// height. Adding stack->total_height() then lands the die on the
-// tip of the connection.
+// e.g. CuPillar for cu-pillar stacks). After merging this die's
+// interconnect fragment the layer resolves to attachment_surface_z;
+// adding stack->total_height() then lands the die on the tip of the
+// connection.
 ```
 
 ### 3.4 Edge cases (must be handled by reader)
 
 | Case | Behavior |
 |---|---|
-| Die has no `connection:` field | **Fallback**: use `interposer.thickness`. |
-| `connection_stack` not defined in technology | **Fallback**: use `interposer.thickness`. |
-| Connection's first layer not in interposer stackup | **Fallback**: use `interposer.thickness`. |
+| Die has no `connection:` field | **Fallback**: use `interposer.thickness`, `connection_height = 0`. |
+| `connection` id not a defined connection stack | **Fallback**: use `interposer.thickness`, `connection_height = 0`. |
+| Connection's first layer not in interposer stackup (even after merge) | **Fallback**: use `interposer.thickness`. |
 | Die has `position.z` explicitly set non-zero | Use the explicit value, do not auto-calculate. |
+
+The earlier behavior of returning `0.0` for the no-connection / null-stack
+cases was a bug (it put dies at world z=0 instead of on the interposer body);
+the fallback above keeps the formula valid in all cases.
 
 ---
 
 ## 4. Writer Contract
 
 Every tool that writes a `.chiplet` file MUST:
-1. Express all `position:` x, y in the canonical frame (§1).
-2. Use geometric center semantics (§1.4).
-3. Declare `anchor:` explicitly per component (§2).
+1. Express all `position:` x, y in the canonical frame (section 1).
+2. Use geometric center semantics (section 1.4).
+3. Declare `anchor:` explicitly per component (section 2).
 4. Set `z` to either the explicit user value, 0 to defer to
-   auto-calc, or the auto-calculated value per §3.
+   auto-calc, or the auto-calculated value per section 3.
 
 ### 4.1 KiCad `export_chiplet.cpp`
 
 **Path:** `kicad/pcbnew/exporters/export_chiplet.cpp`
 
-KiCad cannot produce the canonical frame on its own — it does not
+KiCad cannot produce the canonical frame on its own; it does not
 read the interposer GDS. The pipeline therefore keeps two steps and
 formalizes them: KiCad emits an **intermediate** file (positions in
 PCB-bbox-corner), and `hyp_to_gds.py --update-chiplet-file` finalizes
@@ -295,51 +349,63 @@ KiCad's responsibilities:
 - chiplet-studio MUST refuse to load files where
   `_metadata.finalize_required: true`.
 
-A tighter integration — KiCad invoking `hyp_to_gds.py` automatically
-so a single action yields the canonical file — is deferred (see §8,
+A tighter integration, KiCad invoking `hyp_to_gds.py` automatically
+so a single action yields the canonical file, is deferred (see section 8,
 Future Work). It requires `hyp_to_gds.py` to be discoverable from
 KiCad's runtime (PATH, plugin packaging, or bundling), which is a
 distribution-level change.
 
 ### 4.2 `hyp_to_gds.py::update_chiplet_file`
 
-**Path:**
-`kicad_designs/kicad_interposer_hyperlynx_to_gds/hyp_to_gds.py`
+**Path:** `chiplet_kicad_plugin/hyp_to_gds.py`
+(`def update_chiplet_file` near line 1711; consumed by adk-tools as
+`tools/chiplet_kicad_plugin/hyp_to_gds.py`).
 
 This finalizer is the only place that owns the interposer GDS bbox,
 so it performs the frame conversion:
-- Interposer `position:` → GDS-bbox-center.
-- Die `position:` → re-anchored to GDS-bbox-corner.
-- io_pad `position:` → re-anchored to GDS-bbox-corner using the same
-  `(gds_left, gds_bottom)` shift applied to dies:
+- Interposer `position:` to GDS-bbox-center.
+- Die `position:` re-anchored to GDS-bbox-corner.
+- io_pad `position:` re-anchored to GDS-bbox-corner using the same
+  `(gds_left, gds_bottom)` shift applied to dies. The finalizer rebuilds
+  each component's `io_pads` list fresh from the JSON keys, subtracting the
+  shift from the source `x_um`/`y_um`:
   ```python
-  for pad in component['io_pads']:
-      pad['position']['x'] -= gds_left
-      pad['position']['y'] -= gds_bottom
+  component['io_pads'] = [
+      {
+          'id': p.get('ref') or f"J{i+1}",
+          'io_class': p.get('io_class', 'wire_bond'),
+          'net': p.get('net', ''),
+          'position': {
+              'x': float(p.get('x_um', 0.0)) - gds_left,
+              'y': float(p.get('y_um', 0.0)) - gds_bottom,
+          },
+          ...
+      }
+      for i, p in enumerate(io_pads)
+  ]
   ```
+  If no bbox is available it leaves them un-shifted (HYP-absolute) and warns.
 - Emit `anchor:` per component (interposer `bbox_center`, dies
   `gds_origin`; io_pads inherit the interposer frame and declare no
   anchor of their own).
-- Cite this document in a comment near the conversion:
-  `# Per chiplet-studio/docs/coord_frame_contract.md §1, position is
-  in GDS-bbox-corner frame, geometric center.`
-- Strip the `_metadata` block on output — the canonical `.chiplet`
+- Strip the `_metadata` block on output; the canonical `.chiplet`
   carries no `finalize_required` marker.
 
 The interposer override and die re-anchor are the finalizer's
 legitimate job: KiCad emits in PCB-bbox-corner and does not own the
-GDS bbox, so converting PCB-bbox-corner → GDS-bbox-corner for any
-design where PCB-bbox ≠ GDS-bbox must happen here.
+GDS bbox, so converting PCB-bbox-corner to GDS-bbox-corner for any
+design where PCB-bbox does not equal GDS-bbox must happen here.
 
 ### 4.3 `hyp_to_gds.py::add_io_pads` and the JSON producer
 
-**Path:** `hyp_to_gds.py::add_io_pads` consumes `io_pads.json`
-produced by `kicad_pcb_to_iopads.py`.
+**Path:** `chiplet_kicad_plugin/hyp_to_gds.py::add_io_pads`
+(`def add_io_pads` near line 1466) consumes `io_pads.json` produced by
+`kicad_pcb_to_iopads.py`.
 
-The JSON may remain in HYP-absolute coordinates — it feeds GDS-side
+The JSON may remain in HYP-absolute coordinates; it feeds GDS-side
 placement, which lives in absolute coords. The conversion to
 GDS-bbox-corner is the responsibility of `update_chiplet_file`
-(§4.2), which owns the GDS bbox lookup.
+(section 4.2), which owns the GDS bbox lookup.
 
 ### 4.4 `gds_to_kicad` (footprint origin convention)
 
@@ -348,9 +414,10 @@ GDS-bbox-corner is the responsibility of `update_chiplet_file`
 The tool sets the KiCad footprint reference text at `(at 0 0)`,
 placing the footprint origin at GDS cell (0, 0). Pads are placed at
 their GDS-derived `(center_x, center_y)` relative to (0, 0). The
-`--flip-chip` flag mirrors X only.
+`--flip-chip` flag mirrors X only (`mx = -1 if flip_chip else 1`),
+generating the footprint as seen from the interposer side.
 
-This convention is the reason dies declare `anchor: gds_origin` —
+This convention is the reason dies declare `anchor: gds_origin`;
 their GDS (0,0) is the reference point KiCad uses.
 
 ### 4.5 Future writers
@@ -367,19 +434,34 @@ Every tool that reads a `.chiplet` file MUST:
 1. Parse `anchor:` and store it on the component.
 2. Use `anchor:` (not `ComponentType`) to drive mesh centering.
 3. Validate position values are in plausible range; warn loudly if
-   any `position.x` or `position.y` exceeds 1e5 µm (heuristic
+   any `position.x` or `position.y` exceeds 1e5 um (heuristic
    indicator of HYP-absolute leakage).
 
 ### 5.1 `chiplet-studio/src/formats/ChipletFormat.cpp`
 
-- Parse the `anchor:` field per component (default to `bbox_center`
-  on absence with `[chiplet] WARN: anchor not declared, defaulting to
-  bbox_center`).
-- Reject files declaring `_metadata.finalize_required: true` with a
-  clear error: `error: this .chiplet is intermediate (PCB-bbox-corner
-  frame); run hyp_to_gds.py --update-chiplet-file to finalize`.
-- Validate `|position.x|, |position.y| < 1e5 µm` per component;
-  warn on violation.
+`ChipletFormat::load` delegates parsing and structural validation to the
+vendored reference library (`cfio::load`, `src/formats/chiplet_format_io/`)
+and re-throws `cfio::ChipletFormatError` as `ChipletFormatException` so
+callers' contracts hold. The library owns the YAML grammar, the
+`format_version` gate, and the intermediate-file guard; `ChipletFormat.cpp`
+adds the frame/anchor semantics:
+
+- Parse the `anchor:` field per component. Absent leaves the `BboxCenter`
+  default (`Component.h`, `m_anchor = Anchor::BboxCenter`) marked undeclared;
+  present-but-unknown warns per component and is treated as undeclared.
+  After loading, a single **file-level** summary lists every component that
+  was defaulted: `N component(s) without explicit 'anchor' field; defaulted
+  to bbox_center: <idlist>` followed by a pointer to this document, section 2.
+- Intermediate-file rejection lives in the vendored library, not in
+  `ChipletFormat.cpp`: `cfio::validate` throws when
+  `_metadata.finalize_required: true` and `allow_intermediate` is false, with
+  the message `this is an intermediate .chiplet (_metadata.finalize_required:
+  true); run <finalizer> to finalize, or pass allow_intermediate=true`.
+  `ChipletFormat::load` surfaces that as a `ChipletFormatException`; the net
+  effect (refuse to load) is unchanged.
+- Validate `|position.x|, |position.y| < 1e5 um` per component and per io_pad
+  (`kPositionWarnThreshold_um = 1.0e5`); warn loudly on violation, citing
+  section 1 (components) and section 6 (io_pads).
 
 ### 5.2 `chiplet-studio/src/view3d/LayerMeshBuilder.cpp`
 
@@ -405,7 +487,7 @@ Resolve the anchor from the component, not from `ComponentType`:
 Anchor anchor = comp.anchor();
 ```
 
-Pass `anchor` to `LayerMeshBuilder`. The chiplet → 3D world
+Pass `anchor` to `LayerMeshBuilder`. The chiplet to 3D world
 coordinate mapping is:
 
 ```cpp
@@ -419,36 +501,33 @@ The flipZ scale is orthogonal to anchor and unchanged.
 
 ### 5.4 `chiplet-studio/src/core/Component.h` / `IOPad.h`
 
-- Add `enum class Anchor { GdsOrigin, BboxCenter }` in a new header
-  `chiplet-studio/src/core/Anchor.h` (or inline in `Component.h`).
-- Add `Anchor m_anchor = Anchor::BboxCenter` to `Component` with
-  `anchor()` getter and `set_anchor()` setter.
-- Add string conversion helpers:
-  `anchor_to_string(Anchor)` and `string_to_anchor(const std::string&)`.
-- Update the `IOPad` position doc comment from
-  ```
-  2D pad position in micrometers (interposer-global coordinates).
-  ```
-  to
-  ```
-  2D pad position in micrometers, in the canonical frame defined in
-  chiplet-studio/docs/coord_frame_contract.md (interposer-local,
-  GDS-bbox-corner).
-  ```
+The `Anchor` enum is defined inline in `Component.h`
+(`enum class Anchor { GdsOrigin, BboxCenter };`); there is no separate
+`Anchor.h`. `Component` holds `Anchor m_anchor = Anchor::BboxCenter` with an
+`anchor()` getter, `set_anchor()` setter, and an `anchor_declared()` flag, plus
+the `anchor_to_string` / `string_to_anchor` helpers. The `IOPad` position doc
+comment (`IOPad.h`) documents the canonical frame:
+
+```
+2D pad position in micrometers, in the canonical frame defined in
+chiplet-studio/docs/coord_frame_contract.md (interposer-local,
+GDS-bbox-corner of the parent interposer's top_cell, geometric
+center of the pad).
+```
 
 ### 5.5 `chiplet-studio/src/core/Assembly.cpp::calculate_component_z`
 
-For dies with a missing `connection` or an undefined
-`connection_stack`, fall back to `interposer.thickness` rather than
-returning 0:
+For dies with a missing `connection`, an undefined connection stack, or a
+first layer that does not resolve in the (merged) interposer stackup, fall
+back to `interposer.thickness` rather than returning 0:
 
 | Case | Behavior |
 |---|---|
-| `comp.connection().empty()` | `mounting_surface = interposer.thickness; total_height = 0` |
+| `comp.connection().empty()` | `mounting_surface = interposer.thickness; connection_height = 0` |
 | `connection_stack(comp.connection())` returns null | same as above |
-| First layer name not in interposer stackup | fall back to `interposer.thickness` |
+| First layer name not in merged interposer stackup | `mounting_surface = interposer.thickness` |
 
-The Z-mounting formula §3 holds in all cases.
+The Z-mounting formula in section 3 holds in all cases.
 
 ---
 
@@ -458,16 +537,16 @@ The Z-mounting formula §3 holds in all cases.
 
 io_pads `position:` lives in the same canonical frame as components
 (GDS-bbox-corner of the interposer top_cell, geometric center of the
-pad, µm). io_pads are nested under their interposer in the schema and
+pad, um). io_pads are nested under their interposer in the schema and
 inherit the interposer's frame. They do **not** declare an `anchor:`
-field — they are points (size is 2D extent, not a centering rule).
+field; they are points (size is 2D extent, not a centering rule).
 
 ### 6.2 Validation
 
 io_pads must be re-anchored to the canonical frame by the finalizer
-(§4.2). A reader MUST warn (or reject) when `|position.x|` or
-`|position.y|` exceeds 1e5 µm: the interposer GDS bbox is on the
-order of a few thousand µm, so values that large indicate
+(section 4.2). A reader MUST warn (or reject) when `|position.x|` or
+`|position.y|` exceeds 1e5 um: the interposer GDS bbox is on the
+order of a few thousand um, so values that large indicate
 HYP-absolute coordinates leaking through un-converted. io_pads are
 stored as metadata and not currently rendered in 3D, but their
 positions must still be canonical for any downstream consumer.
@@ -476,53 +555,66 @@ positions must still be canonical for any downstream consumer.
 
 ## 7. Verification Fixtures
 
-Three fixtures, all required.
+Two fixture groups (synthetic + demo) live in the C++ contract test;
+a third KLayout-independent geometric check lives next to the finalizer.
 
 ### 7.1 Synthetic fixture (unit test)
 
 **Files:**
 - `chiplet-studio/tests/fixtures/coord_contract_synth.chiplet`
 - `chiplet-studio/tests/test_coord_frame_contract.cpp`
+  (`CoordFrameContractSynth` fixture)
 
 **Fixture contents:**
-- 1 interposer, 1000 × 1000 µm, `anchor: bbox_center`,
+- 1 interposer, 1000 x 1000 um, thickness 13.83, `anchor: bbox_center`,
   `position: (500, 500, 0)`.
-- 2 dies of 100 × 100 µm thickness 50, `anchor: gds_origin`:
-  - Die A at `position: (250, 250, 50)`.
-  - Die B at `position: (750, 750, 50)`.
+- 2 dies of 100 x 100 um thickness 50, `anchor: gds_origin`:
+  - `U_A` at `position: (250, 250, 50)`.
+  - `U_B` at `position: (750, 750, 50)`.
 - 4 io_pads at the corners of the interposer:
-  `(50, 50)`, `(950, 50)`, `(50, 950)`, `(950, 950)`.
+  `(50, 50)`, `(950, 50)`, `(50, 950)`, `(950, 950)`, layer `TopMetal2`.
 
 **Test assertions:**
-- `Component::anchor()` returns the parsed value for each component.
-- After loading, the interposer's resolved 3D world position
-  (computed via the same code path as `AssemblyView`) is
-  `(0.5, 0.0, -0.5) mm` (or whatever follows from the canonical
-  mapping; spell out the exact expected vector in the test).
-- Die A's 3D world position is `(0.25, 0.05, -0.25) mm`.
-- Die B's 3D world position is `(0.75, 0.05, -0.75) mm`.
-- io_pad positions parse correctly and are stored verbatim.
+- `Component::anchor()` returns the parsed value and `anchor_declared()`
+  is true for each component.
+- The 3D world mapping (the same `(x/1000, z/1000, -y/1000)` transform as
+  `AssemblyView`) yields, with no tolerance:
+  - interposer `(0.5, 0.0, -0.5) mm`
+  - `U_A` `(0.25, 0.05, -0.25) mm`
+  - `U_B` `(0.75, 0.05, -0.75) mm`
+- io_pad positions, sizes, layer, and io_class parse correctly.
 
 ### 7.2 Demo round-trip (integration test)
 
 **Trigger:** regenerate `interposer_wire_bonding_demo.chiplet`
 end-to-end via KiCad export + `hyp_to_gds.py --update-chiplet-file`.
 
-**Test assertion (in `test_coord_frame_contract.cpp`):**
-load the regenerated `.chiplet`, find U1, assert:
-- `U1.anchor() == Anchor::GdsOrigin`
-- `U1.position().z == 61.83 ± 0.01 µm` (sum of TopMetal2 z_top +
-  cupillar_opt2 total_height)
-- For each U1 pad-on-TopMetal2 in the U1 GDS, its world XY is
-  within 1 µm of the closest cu-pillar SnAgCap cap center on the
-  interposer.
+**Fixture:** `CoordFrameContractWirebondDemo` in
+`test_coord_frame_contract.cpp`. The demo lives in the sibling
+`kicad_designs/` tree, resolved from `$WIREBOND_DEMO_CHIPLET` or the default
+workspace layout; the fixture skips with a clear message if neither is
+reachable.
+
+**Test assertions:** load the regenerated `.chiplet` and check:
+- interposer `anchor() == Anchor::BboxCenter`,
+  `U1.anchor() == Anchor::GdsOrigin`.
+- `U1.position()` near `(1954.12, 2332.48, 57.83)` um
+  (z = 13.83 attachment surface + 44 `cupillar_opt1`).
+- `U2.position()` near `(5170.23, 2420.27, 37.83)` um
+  (z = 13.83 + 24 `vendorx_microbump`); this locks the mixed-method case.
+- interposer position near `(3246.16, 2801.00, 0.0)` um and dimensions near
+  `6492.31 x 5602.00 x 13.83` (board outline per section 1.5).
+- every io_pad sits inside the interposer extent (`0 <= x <= width`,
+  `0 <= y <= height`): the regression net for the HYP-absolute leak.
+- the file loads at all: had it still carried
+  `_metadata.finalize_required: true`, `load` would have thrown.
 
 This is the round-trip regression net for the contract.
 
 ### 7.3 KLayout-independent check (geometric verification)
 
-**File:**
-`kicad_designs/kicad_interposer_hyperlynx_to_gds/tests/check_complete_gds_alignment.py`
+**File:** `chiplet_kicad_plugin/tests/check_complete_gds_alignment.py`
+(adk-tools mirror: `tools/chiplet_kicad_plugin/tests/`).
 
 **Behavior:**
 - Take a `*_complete.gds` path as argument.
@@ -534,7 +626,7 @@ This is the round-trip regression net for the contract.
   - Compute the cu-pillar array bbox in TOP coords (filter by the
     cu-pillar layer pair).
   - Assert: U1 bbox and cu-pillar array bbox overlap; centroid
-    distance within 1 µm.
+    distance within 1 um.
 - Exit 0 on success, non-zero with a clear message on mismatch.
 
 This script is independent of chiplet-studio so a chiplet-studio
@@ -543,19 +635,19 @@ bug cannot mask a real GDS misalignment.
 ### 7.4 Running all three
 
 ```bash
-# 1. Unit tests (chiplet-studio synthetic + round-trip)
-cd chiplet-studio/build
+# 1. Unit + round-trip tests (chiplet_tests target lives at build/tests/).
+#    Run from the chiplet-studio build dir.
 ./tests/chiplet_tests --gtest_filter='CoordFrameContract*'
 
-# 2. Demo regen
-cd kicad_designs/kicad_interposer_hyperlynx_to_gds
-python3 hyp_to_gds.py \
-  --hyp ../../interposer_wire_bonding_demo/test.hyp \
-  --update-chiplet-file ../../interposer_wire_bonding_demo/interposer_wire_bonding_demo.chiplet
+# 2. Demo regen (paths relative to the sibling kicad_designs tree)
+python3 chiplet_kicad_plugin/hyp_to_gds.py \
+  --hyp kicad_designs/interposer_wire_bonding_demo/test.hyp \
+  --update-chiplet-file \
+    kicad_designs/interposer_wire_bonding_demo/interposer_wire_bonding_demo.chiplet
 
 # 3. KLayout-independent geometric check
-python3 tests/check_complete_gds_alignment.py \
-  ../../interposer_wire_bonding_demo/interposer_wire_bonding_demo_complete.gds
+python3 chiplet_kicad_plugin/tests/check_complete_gds_alignment.py \
+  kicad_designs/interposer_wire_bonding_demo/interposer_wire_bonding_demo_complete.gds
 ```
 
 All three must pass before declaring this contract implemented.
@@ -581,7 +673,7 @@ contract.
 
 ---
 
-## Appendix A — Glossary of Coordinate Frames
+## Appendix A, Glossary of Coordinate Frames
 
 The frames present in the toolchain:
 
@@ -591,8 +683,8 @@ The frames present in the toolchain:
 | 2 | PCB-bbox-corner | Lower-left of `BoardEdgesBoundingBox` (or fallback) | KiCad `export_chiplet.cpp` for dies and io_pads |
 | 3 | PCB-bbox-center | (PCB_w/2, PCB_h/2) | KiCad `export_chiplet.cpp` for the interposer |
 | 4 | HYP absolute | Hyperlynx file native (meters, KiCad y-down convention pre-conversion) | `hyp_to_gds.py` input parsing |
-| 5 | GDS absolute | GDS file native (µm, y-up cartesian) | KLayout, hyp_to_gds.py for cell instance placement |
-| 6 | **GDS-bbox-corner** ← canonical | Lower-left of interposer GDS bbox | **THIS CONTRACT.** Also `update_chiplet_file` for dies. |
+| 5 | GDS absolute | GDS file native (um, y-up cartesian) | KLayout, hyp_to_gds.py for cell instance placement |
+| 6 | **GDS-bbox-corner** (canonical) | Lower-left of interposer GDS bbox | **THIS CONTRACT.** Also `update_chiplet_file` for dies. |
 | 7 | GDS-bbox-center | (GDS_w/2, GDS_h/2) | `update_chiplet_file` for the interposer |
 | 8 | Interposer-local-corner | The frame components mean to be in (per the `IOPad` position comment) | The schema's intent. Now formalized as = #6. |
 | 9 | Chiplet-studio 3D world | OpenGL world (mm, y-up, z-out-of-screen) | `AssemblyView` final placement |
@@ -605,9 +697,12 @@ in `.chiplet` files.
 
 ## References
 
-- [`CHIPLET_FORMAT_SPEC.md`](./CHIPLET_FORMAT_SPEC.md) — general
+- [`CHIPLET_FORMAT_SPEC.md`](./CHIPLET_FORMAT_SPEC.md), general
   schema (companion document; this doc adds frame and anchor
   semantics).
+- Reference reader/writer library: `reference/python/` and
+  `reference/cpp/` (chiplet-format-io, Apache-2.0). chiplet-studio
+  consumes a vendored copy of the C++ library.
 
 ---
 
@@ -615,4 +710,6 @@ in `.chiplet` files.
 
 | Version | Date | Author | Changes |
 |---|---|---|---|
-| 1.0 | 2026-05-07 | Mauricio Montañares | Initial contract. Adopted GDS-bbox-corner as canonical frame; explicit `anchor:` field per component; Z-mounting formal definition; verification fixtures spec. |
+| 1.0 | 2026-05-07 | Mauricio Montanares | Initial contract. Adopted GDS-bbox-corner as canonical frame; explicit `anchor:` field per component; Z-mounting formal definition; verification fixtures spec. |
+| 1.1 | 2026-06-18 | Mauricio Montanares | Updated to the two-die mixed-method demo (U1 cupillar_opt1 z=57.83, U2 vendorx_microbump z=37.83); documented per-die fragment merge in calculate_component_z; corrected interposer technology to intm4tm2 and demo dimensions; moved finalizer/check paths to chiplet_kicad_plugin/; noted intermediate-file guard now lives in the vendored chiplet_format_io library; removed em-dashes. |
+| 1.2 | 2026-06-18 | Mauricio Montanares | Relocated to chiplet-spec as the canonical, permissive (Apache-2.0) home, re-synced from the chiplet-studio copy; chiplet-studio now points here. Reframed as a format-level contract whose `chiplet-studio/...`, `kicad/...`, `gds_to_kicad/...` paths denote reference implementations. |
