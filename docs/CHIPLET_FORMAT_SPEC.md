@@ -30,8 +30,8 @@ assembly/DRC environment.
 `.chiplet` is deliberately **not** a chiplet IP datasheet or a marketplace /
 sourcing format. It does **not** model a chiplet's electrical, functional,
 power, thermal, PHY/D2D-protocol, or test characterization. Those belong to a
-part-description standard. The chiplet ecosystem already has one heading toward
-that role:
+part-description standard, a different layer of the stack where standards
+already exist:
 
 - **CDXML** (Chiplet Data Exchange in XML), a per-chiplet, machine-readable
   datasheet: pinout, mechanical envelope, electrical/ESD ratings, and D2D
@@ -42,21 +42,42 @@ that role:
   inter-die placement (its only coordinates are pad positions *within* a single
   part).
 
-The two formats are **complementary layers of one flow**, not competitors:
+One other format family describes multi-die physical assemblies — the same
+layer as `.chiplet`, bound to a different abstraction level:
 
-| | Part description (CDXML -> JEP30) | `.chiplet` |
-|---|---|---|
-| Answers | *what is this part* (datasheet) | *placed where, z-mounted how, DRC-ready* (assembly) |
-| Coordinates | per-pin pad x/y within one die | per-component placement in a shared interposer frame |
-| Stage | part selection / sourcing | physical assembly + DRC |
+- **3Dblox**, originated by TSMC and being standardized as **IEEE P3537**,
+  with an open (BSD-3) reference implementation in OpenROAD (ingestion, an
+  automatic assembly linter, a 3D viewer). 3Dblox binds an assembly to the
+  **P&R abstraction** (LEF/DEF, Verilog netlists, Liberty views) for
+  multi-die EDA and design-space exploration; it references no mask artwork.
+  `.chiplet` binds the same assembly layer to the **mask level** (GDS/OASIS
+  bodies, `.lyp` layer properties, per-layer interconnect metallurgy with
+  method identity, fab DRC parameters) for assembly signoff and fabrication
+  hand-off. The overlap on the assembly core (multi-die placement, z,
+  thickness, flip, per-die technology) is real and is deliberate interop
+  territory: see [`3dblox_interop.md`](./3dblox_interop.md) for a
+  field-by-field mapping and the
+  [`3dblox_ref`](#3dblox_ref-proposed-extension) proposed extension below.
+
+The three are **stages of one flow**, not competitors:
+
+| | Part description (CDXML -> JEP30) | Assembly for P&R / exploration (3Dblox -> P3537) | `.chiplet` |
+|---|---|---|---|
+| Answers | *what is this part* (datasheet) | *how dies stack and connect*, over P&R views | *placed where, z-mounted how, mask-level DRC-ready* |
+| Coordinates | per-pin pad x/y within one die | per-die 3D placement + bump maps over LEF geometry | per-component placement in a shared interposer frame; bodies as GDS/OASIS |
+| Stage | part selection / sourcing | multi-die EDA / design-space exploration | physical assembly + fabrication signoff DRC |
 
 A natural pipeline is: select a part described by CDXML / JEP30 -> place and
-z-mount it in a `.chiplet` assembly -> run assembly DRC. To make that handoff
-explicit, a `.chiplet` component may carry an optional
-[`cdxml_ref`](#cdxml_ref-proposed-extension) that cites the part it instantiates,
-so the assembly *references* a part's IP data rather than re-describing it. The
+z-mount it in a `.chiplet` assembly -> run assembly DRC, with a 3Dblox view of
+the same assembly exportable for P&R-level exploration and linting. To make
+these handoffs explicit, a `.chiplet` component may carry an optional
+[`cdxml_ref`](#cdxml_ref-proposed-extension) citing the part it instantiates,
+and an optional [`3dblox_ref`](#3dblox_ref-proposed-extension) citing the
+3Dblox `ChipletDef` that describes the same die at the P&R level. The
 canonical source of truth for each layer stays where it belongs: part data in
-CDXML / JEP30, placement in `.chiplet`.
+CDXML / JEP30, P&R views in LEF/DEF/3Dblox, mask-level placement in
+`.chiplet` — a derived `.3dbx` assembly file is an export artifact, never a
+second source of truth for placement (see the interop appendix).
 
 ## File Structure
 
