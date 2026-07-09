@@ -22,6 +22,7 @@ anyone, open-source or commercial, can build independent implementations.
 |------|----------|
 | `docs/CHIPLET_FORMAT_SPEC.md` | The `.chiplet` YAML assembly format (v1.0). |
 | `docs/coord_frame_contract.md` | Canonical coordinate-frame, anchor, and z-mounting contract for `.chiplet` positions; every writer and reader must obey it. |
+| `docs/3dblox_interop.md` | Non-normative field-by-field mapping between `.chiplet` and 3Dblox / IEEE P3537. |
 | `schemas/*.schema.json` | Machine-readable JSON Schemas (boundary manifest, interconnect methods, layers, rule params, interconnect rules). |
 | `schemas/chiplet_pads.json` | Pad-layer vocabulary for black-box chiplets (GDS 205/0, 205/25, 206/0). |
 | `examples/` | Sample `.chiplet`, `*.boundaries.json`, and `interconnect_methods.json`. |
@@ -36,10 +37,14 @@ since they reference internal class names and CLI surfaces rather than the forma
 
 `.chiplet` is a **physical-assembly layout** format: it places dies, interposers,
 and substrates in one shared coordinate frame, z-mounts each die on its chosen
-interconnect, and feeds an assembly DRC flow. It does **not** describe a chiplet
-as IP; no electrical, functional, power, thermal, PHY/D2D-protocol, or test
-characterization. That is a different layer of the stack, and the ecosystem
-already has a standard heading toward it:
+interconnect, and feeds an assembly DRC flow. Two other format families touch
+this space: one sits on a different layer of the stack, one on the same layer
+at a different abstraction level.
+
+**Part description (different layer) - CDXML / JEDEC JEP30.** `.chiplet` does
+**not** describe a chiplet as IP; no electrical, functional, power, thermal,
+PHY/D2D-protocol, or test characterization. That is the part-description
+layer, where standards already exist:
 
 - **CDXML** (Chiplet Data Exchange in XML), the per-chiplet datasheet: pinout,
   mechanical envelope, electrical/ESD ratings, D2D interface type. It was
@@ -49,16 +54,47 @@ already has a standard heading toward it:
   inter-die placement (its only coordinates are pad positions *within* a single
   part).
 
-So the two are **complementary layers, not competitors**: CDXML / JEP30 describes
+These are **complementary layers, not competitors**: CDXML / JEP30 describes
 *what a part is*; `.chiplet` describes *where it is placed, how it is z-mounted,
 and how the assembly is verified*. The intended pipeline is **select (CDXML / JEP30)
 -> place (`.chiplet`) -> assembly DRC**. A `.chiplet` `die` may carry an optional,
 *proposed* `cdxml_ref` (documented as an extension; not part of the v1.0 schema)
 citing the part it instantiates, so an assembly *references* part data rather than
 duplicating it (see
-[`docs/CHIPLET_FORMAT_SPEC.md`](docs/CHIPLET_FORMAT_SPEC.md)). `.chiplet` aims to
-serve as an open interchange for the **physical-assembly + DRC** layer, downstream
-of and interoperable with the part-description standards, not a competing
+[`docs/CHIPLET_FORMAT_SPEC.md`](docs/CHIPLET_FORMAT_SPEC.md)).
+
+**Assembly description (same layer, different abstraction level) - 3Dblox /
+IEEE P3537.** **3Dblox**, originated by TSMC and being standardized as
+**IEEE P3537**, also describes multi-die physical assemblies (per-die
+technology, 3D placement and orientation, bond regions, per-bump maps) and
+has an open-source (BSD-3) implementation in OpenROAD (ingestion, an
+automatic assembly linter, a 3D viewer). The two formats overlap on the
+assembly core (multi-die placement, z, thickness, flip, per-die technology)
+and diverge in what they bind that assembly to:
+
+- **3Dblox** binds it to the **P&R abstraction** (LEF/DEF, Verilog netlists,
+  Liberty views) for multi-die EDA flows and design-space exploration. It
+  references no artwork files.
+- **`.chiplet`** binds it to the **mask level**: GDS/OASIS bodies with `.lyp`
+  layer properties, per-layer interconnect metallurgy with method identity and
+  provenance, polygonal boundary manifests, and the fab DRC parameters an
+  assembly-signoff flow consumes.
+
+An exploration-level and a signoff-level model of the same assembly are both
+useful, so the intended relationship is **interop, not rivalry**: the spec
+documents a *proposed* component-level `3dblox_ref` extension (analogous to
+`cdxml_ref`) and a field-by-field mapping in
+[`docs/3dblox_interop.md`](docs/3dblox_interop.md), which also defines the
+conventions a mechanical (lossy) `.chiplet` -> 3Dblox export would follow. On
+openness the models differ: 3Dblox has historically been distributed under
+click-through terms, and P3537, as an IEEE-SA project, follows the IEEE
+patent policy (RAND commitments), while everything in this repository is
+Apache-2.0 with an explicit patent non-assertion (below).
+
+`.chiplet` aims to serve as an open interchange for the **mask-level
+physical-assembly + DRC** layer: downstream of and interoperable with the
+part-description standards (CDXML / JEP30), complementary at the assembly
+layer to the P&R-level descriptions (3Dblox / P3537), and not a competing
 "chiplet exchange format" writ large.
 
 ## License and implementer rights
