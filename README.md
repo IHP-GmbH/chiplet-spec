@@ -41,7 +41,7 @@ interconnect, and feeds an assembly DRC flow. Two other format families touch
 this space: one sits on a different layer of the stack, one on the same layer
 at a different abstraction level.
 
-**Part description (different layer) — CDXML / JEDEC JEP30.** `.chiplet` does
+**Part description (different layer) - CDXML / JEDEC JEP30.** `.chiplet` does
 **not** describe a chiplet as IP; no electrical, functional, power, thermal,
 PHY/D2D-protocol, or test characterization. That is the part-description
 layer, where standards already exist:
@@ -63,19 +63,19 @@ citing the part it instantiates, so an assembly *references* part data rather th
 duplicating it (see
 [`docs/CHIPLET_FORMAT_SPEC.md`](docs/CHIPLET_FORMAT_SPEC.md)).
 
-**Assembly description (same layer, different abstraction level) — 3Dblox /
+**Assembly description (same layer, different abstraction level) - 3Dblox /
 IEEE P3537.** **3Dblox**, originated by TSMC and being standardized as
-**IEEE P3537**, also describes multi-die physical assemblies — per-die
-technology, 3D placement and orientation, bond regions, per-bump maps — and
-has an open (BSD-3) reference implementation in OpenROAD (ingestion, an
+**IEEE P3537**, also describes multi-die physical assemblies (per-die
+technology, 3D placement and orientation, bond regions, per-bump maps) and
+has an open-source (BSD-3) implementation in OpenROAD (ingestion, an
 automatic assembly linter, a 3D viewer). The two formats overlap on the
 assembly core (multi-die placement, z, thickness, flip, per-die technology)
 and diverge in what they bind that assembly to:
 
-- **3Dblox** binds it to the **P&R abstraction** — LEF/DEF, Verilog netlists,
-  Liberty views — for multi-die EDA flows and design-space exploration. It
-  references no mask artwork.
-- **`.chiplet`** binds it to the **mask level** — GDS/OASIS bodies with `.lyp`
+- **3Dblox** binds it to the **P&R abstraction** (LEF/DEF, Verilog netlists,
+  Liberty views) for multi-die EDA flows and design-space exploration. It
+  references no artwork files.
+- **`.chiplet`** binds it to the **mask level**: GDS/OASIS bodies with `.lyp`
   layer properties, per-layer interconnect metallurgy with method identity and
   provenance, polygonal boundary manifests, and the fab DRC parameters an
   assembly-signoff flow consumes.
@@ -85,16 +85,16 @@ useful, so the intended relationship is **interop, not rivalry**: the spec
 documents a *proposed* component-level `3dblox_ref` extension (analogous to
 `cdxml_ref`) and a field-by-field mapping in
 [`docs/3dblox_interop.md`](docs/3dblox_interop.md), which also defines the
-conventions a mechanical (lossy) `.chiplet` -> 3Dblox export follows. On
-openness the models differ: the 3Dblox specification is distributed by TSMC
-under click-through terms and P3537 follows the standard IEEE (RAND) patent
-policy, while everything in this repository is Apache-2.0 with an explicit
-patent non-assertion (below).
+conventions a mechanical (lossy) `.chiplet` -> 3Dblox export would follow. On
+openness the models differ: 3Dblox has historically been distributed under
+click-through terms, and P3537, as an IEEE-SA project, follows the IEEE
+patent policy (RAND commitments), while everything in this repository is
+Apache-2.0 with an explicit patent non-assertion (below).
 
 `.chiplet` aims to serve as an open interchange for the **mask-level
 physical-assembly + DRC** layer: downstream of and interoperable with the
 part-description standards (CDXML / JEP30), complementary at the assembly
-layer to the P&R-level descriptions (3Dblox / P3537) — not a competing
+layer to the P&R-level descriptions (3Dblox / P3537), and not a competing
 "chiplet exchange format" writ large.
 
 ## License and implementer rights

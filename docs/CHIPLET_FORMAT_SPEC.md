@@ -42,14 +42,14 @@ already exist:
   inter-die placement (its only coordinates are pad positions *within* a single
   part).
 
-One other format family describes multi-die physical assemblies — the same
+One other format family describes multi-die physical assemblies - the same
 layer as `.chiplet`, bound to a different abstraction level:
 
 - **3Dblox**, originated by TSMC and being standardized as **IEEE P3537**,
-  with an open (BSD-3) reference implementation in OpenROAD (ingestion, an
+  with an open-source (BSD-3) implementation in OpenROAD (ingestion, an
   automatic assembly linter, a 3D viewer). 3Dblox binds an assembly to the
   **P&R abstraction** (LEF/DEF, Verilog netlists, Liberty views) for
-  multi-die EDA and design-space exploration; it references no mask artwork.
+  multi-die EDA and design-space exploration; it references no artwork files.
   `.chiplet` binds the same assembly layer to the **mask level** (GDS/OASIS
   bodies, `.lyp` layer properties, per-layer interconnect metallurgy with
   method identity, fab DRC parameters) for assembly signoff and fabrication
@@ -69,14 +69,15 @@ The three are **stages of one flow**, not competitors:
 
 A natural pipeline is: select a part described by CDXML / JEP30 -> place and
 z-mount it in a `.chiplet` assembly -> run assembly DRC, with a 3Dblox view of
-the same assembly exportable for P&R-level exploration and linting. To make
+the same assembly derivable (via the mapping in the interop appendix) for
+P&R-level exploration and linting. To make
 these handoffs explicit, a `.chiplet` component may carry an optional
 [`cdxml_ref`](#cdxml_ref-proposed-extension) citing the part it instantiates,
 and an optional [`3dblox_ref`](#3dblox_ref-proposed-extension) citing the
 3Dblox `ChipletDef` that describes the same die at the P&R level. The
 canonical source of truth for each layer stays where it belongs: part data in
 CDXML / JEP30, P&R views in LEF/DEF/3Dblox, mask-level placement in
-`.chiplet` — a derived `.3dbx` assembly file is an export artifact, never a
+`.chiplet` - a derived `.3dbx` assembly file is an export artifact, never a
 second source of truth for placement (see the interop appendix).
 
 ## File Structure
@@ -394,8 +395,8 @@ At least one of `chiplet` or `uri` SHOULD be present so the reference resolves.
 All keys are strings.
 
 The reference is deliberately **component-level only** (a die cites the
-`ChipletDef` in a `.3dbv`). An *assembly*-level reference — to a `.3dbx`,
-which re-states placements and connections for the whole assembly — is **not**
+`ChipletDef` in a `.3dbv`). An *assembly*-level reference - to a `.3dbx`,
+which re-states placements and connections for the whole assembly - is **not**
 proposed: two machine-readable placement sources for one assembly would create
 a source-of-truth ambiguity that the part- and die-level references do not
 have. A project that keeps a derived `.3dbx` export alongside a `.chiplet` may
@@ -404,7 +405,7 @@ build artifact, and the `.chiplet` file remains authoritative for placement
 and z-mounting. [`3dblox_interop.md`](./3dblox_interop.md) defines the mapping
 such an export follows.
 
-Reference-library behavior today: identical to `cdxml_ref` — the Python
+Reference-library behavior today: identical to `cdxml_ref` - the Python
 reference reader preserves the field; the C++ struct reader does not
 round-trip it. Treat `3dblox_ref` as opt-in metadata.
 
@@ -816,4 +817,4 @@ components:
 | 1.0 | 2024-01 | Initial specification |
 | 1.0 | 2026-06-19 | Documentation reconciled with the reference libraries and [`coord_frame_contract.md`](./coord_frame_contract.md). Documented previously-undocumented parts of the existing `format_version` 1.0 schema: `assembly.assembly_gds`/`io_technology`, component `anchor`/`orientation`/`connection`/`cells`/`io_pads`, geometric-center `position` semantics, the per-die z-mounting rule, the `_metadata` intermediate-file guard, and the top-level `connection_stacks`, `interconnect`, `interfaces`, `netlist`, and `flow` blocks. Reorganized Validation Rules into reference-enforced vs consumer-level. Added a "Scope and relationship to other standards" section (CDXML / OCP-ODSA / JEDEC JEP30) and a proposed, non-normative `cdxml_ref` extension. No on-disk format change; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-06-19 | Editorial pass: aligned the File Structure skeleton with the Root Level Keys table (one required `assembly` block plus optional blocks; ten recognized keys), documented the full `orientation` vocabulary (`face_up`/`flip_chip`/`face_down`, `face_up` default and writer suppression) to match the reference, and removed non-ASCII dashes. No normative change. |
-| 1.0 | 2026-07-09 | Positioned `.chiplet` against 3Dblox / IEEE P3537 in the scope section (same physical-assembly layer; P&R vs mask abstraction; interop, not rivalry), added a proposed, non-normative `3dblox_ref` extension mirroring `cdxml_ref` (component-level only; no assembly-level `.3dbx` reference by design), and added the non-normative mapping appendix [`3dblox_interop.md`](./3dblox_interop.md). No on-disk format change; `format_version` stays `"1.0"`. |
+| 1.0 | 2026-07-09 | Positioned `.chiplet` relative to 3Dblox / IEEE P3537 in the scope section (same physical-assembly layer; P&R vs mask abstraction; interop, not rivalry), added a proposed, non-normative `3dblox_ref` extension mirroring `cdxml_ref` (component-level only; no assembly-level `.3dbx` reference by design), and added the non-normative mapping appendix [`3dblox_interop.md`](./3dblox_interop.md). No on-disk format change; `format_version` stays `"1.0"`. |
