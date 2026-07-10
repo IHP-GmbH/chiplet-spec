@@ -72,7 +72,7 @@ components:
     layout: ./gds/Metal_Test.gds
     top_cell: Metal_Test
     position: {x: 1954.121, y: 2332.483, z: 57.83}     # 13.83 + 44 (cupillar_opt1)
-    dimensions: {width: 730.0, height: 2566.339, thickness: 0.0}
+    dimensions: {width: 730.0, height: 2566.339, thickness: 750.0}
     rotation: {z: 0.0}
 
   - id: U2
@@ -84,5 +84,5 @@ components:
     layout: ./gds/vendor_die.gds
     top_cell: VENDOR_DIE
     position: {x: 5170.23, y: 2420.27, z: 37.83}       # 13.83 + 24 (vendorx_microbump)
-    dimensions: {width: 730.0, height: 2566.339, thickness: 0.0}
+    dimensions: {width: 730.0, height: 2566.339, thickness: 750.0}
     rotation: {z: 0.0}

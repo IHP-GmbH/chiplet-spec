@@ -256,6 +256,12 @@ dimensions:
   thickness: <float>  # Z-extent in micrometers
 ```
 
+`thickness` is the physical Z-extent of the component body itself.
+For dies it excludes the interconnect below the body: bump and pillar
+heights are modeled by the referenced `connection_stacks` entry, and
+the body extends upward from `position.z` (the seating plane; see
+`coord_frame_contract.md` section 1.4).
+
 ### Array Configuration (for `die_array` type)
 
 ```yaml

@@ -129,7 +129,17 @@ y-up, in um.
 
 ### 1.4 Position semantics
 
-`position:` always refers to the component's **geometric center**.
+`position:` refers to the component's **geometric center** in X and Y.
+
+In Z, `position.z` is the component's **seating plane**: the bottom
+face of the placed body, the one that meets the mounting surface (for
+dies on a connection stack, the tip of that stack; see section 3).
+`dimensions.thickness` extends the body upward from `position.z`.
+Files that predate real thickness data carry the placeholder
+`thickness: 0.0`, where the center and seating-plane readings
+coincide; with a real thickness they differ by `thickness / 2`, and
+the seating-plane reading is the normative one: it is what the
+z-mounting rule computes and what consumers implement.
 
 For a die of width 1000 um and height 2000 um placed with its
 lower-left corner at (250, 250) inside the interposer:
@@ -137,11 +147,11 @@ lower-left corner at (250, 250) inside the interposer:
 position:
   x: 750.0      # 250 + 1000/2
   y: 1250.0     # 250 + 2000/2
-  z: 57.83      # see section 3 for Z mounting
+  z: 57.83      # seating plane; see section 3 for Z mounting
 dimensions:
   width: 1000.0
   height: 2000.0
-  thickness: 50.0
+  thickness: 50.0   # body spans z 57.83 to 107.83
 ```
 
 ### 1.5 Interposer dimensions vs. position
@@ -228,7 +238,7 @@ components:
     dimensions:
       width: 730.0
       height: 2566.339
-      thickness: 0.0
+      thickness: 750.0   # physical die body (Si bulk), see section 1.4
 ```
 
 ---
