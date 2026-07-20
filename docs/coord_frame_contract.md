@@ -61,7 +61,7 @@ are the regression net that proves the behavior described here.
    intermediate `.chiplet` whose positions live in the wrong frame
    (PCB-bbox-corner) and is not directly consumable by chiplet-studio.
 6. Interposer `dimensions:` are the **board outline** (prBoundary
-   189/0, drawn from KiCad Edge.Cuts) when present in the GDS;
+   235/0, drawn from KiCad Edge.Cuts) when present in the GDS;
    `position:` stays the full-GDS-bbox center (section 1.5).
 
 Any tool that writes a `.chiplet` file MUST conform to this contract.
@@ -99,7 +99,7 @@ The canonical frame for `.chiplet` `position:` values is:
   the only one with no such hidden shift relative to what gets
   fabricated.
 - Since the converter draws the board outline (Edge.Cuts to prBoundary
-  189/0) into the interposer GDS, the GDS bbox *contains* the outline.
+  235/0) into the interposer GDS, the GDS bbox *contains* the outline.
   When all drawn geometry sits inside the outline, the normal case,
   the canonical origin coincides with the board outline's lower-left
   corner, and the historical shift above is zero by construction.
@@ -161,7 +161,7 @@ questions and have different sources:
 
 | Field | Source | Meaning |
 |---|---|---|
-| `dimensions: width/height` | bbox of prBoundary 189/0 (the board outline, drawn from KiCad Edge.Cuts) when the layer is present; bbox of all drawn geometry otherwise (legacy GDS) | The fab extent of the interposer, what viewers render as the substrate body |
+| `dimensions: width/height` | bbox of prBoundary 235/0 (the board outline, drawn from KiCad Edge.Cuts) when the layer is present; bbox of all drawn geometry otherwise (legacy GDS) | The fab extent of the interposer, what viewers render as the substrate body |
 | `position: x/y` | half of the **full** GDS bbox (all layers, outline included) | Where the mesh bbox center sits in the canonical frame (`anchor: bbox_center`, section 2) |
 
 When the outline contains all drawn geometry, the full bbox equals
@@ -219,7 +219,7 @@ components:
       y: 2801.000      #   when all geometry is on-board, see section 1.5)
       z: 0.0
     dimensions:
-      width: 6492.312  # board outline (prBoundary 189/0), see section 1.5
+      width: 6492.312  # board outline (prBoundary 235/0), see section 1.5
       height: 5602.001
       thickness: 13.83
 
