@@ -241,6 +241,29 @@ components:
       thickness: 750.0   # physical die body (Si bulk), see section 1.4
 ```
 
+### 2.4 Orientation vocabulary
+
+A component's `orientation:` field takes exactly two canonical values:
+
+| Value | Meaning |
+|---|---|
+| `face_up` (default) | The die artwork is used as drawn; no mirror. Applied before `rotation.z`. |
+| `flip_chip` | The die is mounted face-down onto the interposer; realized as an **x-mirror** of the die artwork (`mx = -1`), applied before `rotation.z`. |
+
+`face_up` is the default when the field is absent. **`face_down` is not a
+canonical token**: flip-chip mounting is expressed as `flip_chip` (the mirror
+is the observable contract; "face down" is the physical picture, not the field
+value). Writers MUST emit only `face_up`/`flip_chip`.
+
+Reader obligations on a non-canonical or unknown `orientation:` token:
+
+- **Validators and exporters** (e.g. the ADK `pads_vs_pillars` check and the
+  `chiplet2dbx` interop exporter) MUST reject it — an ambiguous token must
+  never silently yield wrong geometry.
+- **Interactive viewers** MAY be lenient (keep rendering) but MUST warn; they
+  MAY treat `face_down` as `flip_chip`. A viewer must never silently render an
+  unknown token as `face_up` (un-mirrored).
+
 ---
 
 ## 3. Z-Mounting Rule
