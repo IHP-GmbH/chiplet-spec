@@ -107,6 +107,12 @@ Component parse_component(const YAML::Node& node) {
 
     if (node["dimensions"]) c.dimensions = parse_dimensions(node["dimensions"]);
 
+    // Optional interposer die-attachment surface z. Absent => nullopt, and
+    // consumers fall back to dimensions.thickness (legacy mount reference).
+    if (node["attachment_surface_z"] && !node["attachment_surface_z"].IsNull()) {
+        c.attachment_surface_z = node["attachment_surface_z"].as<double>();
+    }
+
     if (node["array"]) {
         const YAML::Node& a = node["array"];
         ComponentArray arr;
@@ -603,6 +609,13 @@ std::string dumps(const ChipletDocument& doc, const DumpOptions& opts) {
                 out << YAML::Key << "height" << YAML::Value << dims.height;
                 out << YAML::Key << "thickness" << YAML::Value << dims.thickness;
                 out << YAML::EndMap;
+            }
+
+            // Emitted only when engaged, so files without an attachment surface
+            // round-trip byte-identically (the legacy thickness-as-mount case).
+            if (comp.attachment_surface_z) {
+                out << YAML::Key << "attachment_surface_z" << YAML::Value
+                    << comp.attachment_surface_z.value();
             }
 
             if (comp.array) {

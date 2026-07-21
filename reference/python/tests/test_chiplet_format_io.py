@@ -71,6 +71,32 @@ def test_dump_roundtrips_components_order():
     assert [c["id"] for c in reloaded["components"]] == ids
 
 
+def _component(doc, cid):
+    for c in doc["components"]:
+        if c["id"] == cid:
+            return c
+    return None
+
+
+def test_attachment_surface_z_roundtrip():
+    """The interposer's die-mount plane parses, survives dump/load and is
+    distinct from the physical body thickness; dies carry none (consumers fall
+    back to dimensions.thickness)."""
+    doc = cfio.load(EXAMPLES / "interposer_demo_design.chiplet")
+    interposer = _component(doc, "interposer")
+    assert interposer is not None
+    assert interposer["attachment_surface_z"] == 13.83
+    # thickness is now the physical body, decoupled from the mount plane.
+    assert interposer["dimensions"]["thickness"] == 300.0
+
+    die = _component(doc, "U1")
+    assert die is not None
+    assert "attachment_surface_z" not in die
+
+    reloaded = cfio.loads(cfio.dumps(doc))
+    assert _component(reloaded, "interposer")["attachment_surface_z"] == 13.83
+
+
 def test_no_gpl_runtime_dependency():
     """Importing/using the library must not pull in pcbnew or klayout."""
     cfio.loads('format_version: "1.0"\nassembly:\n  name: a\n')
