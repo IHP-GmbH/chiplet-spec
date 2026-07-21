@@ -138,8 +138,11 @@ struct Component {
     std::vector<std::string> cells;
     Position3D position;
     Rotation3D rotation;
-    // Canonical orientation string ("face_up" / "flip_chip" / "face_down");
-    // empty means the field was absent (treated as face_up downstream).
+    // Raw orientation string. The contract defines only "face_up" (default)
+    // and "flip_chip" (see coord_frame_contract.md 2.4); "face_down" is a
+    // non-canonical alias consumers may accept-with-warning. Empty means the
+    // field was absent (treated as face_up downstream). The consumer validates
+    // the value.
     std::string orientation;
     // Raw anchor string if the field was present; std::nullopt if absent. The
     // consumer validates the value and owns the "missing anchor" warning.
