@@ -48,7 +48,12 @@ components:
     layout: ./gds/interposer.gds
     top_cell: INTERPOSER
     position: {x: 3246.156, y: 2801.000, z: 0.0}      # full GDS-bbox center
-    dimensions: {width: 6492.312, height: 5602.001, thickness: 13.83}
+    # thickness is the physical interposer body (Si substrate + BEOL),
+    # illustrative here; real exports take it from the KiCad stackup. The body
+    # extends downward from attachment_surface_z (the BEOL-top mount plane), so
+    # the dies' z below is unchanged by the body value.
+    dimensions: {width: 6492.312, height: 5602.001, thickness: 300.0}
+    attachment_surface_z: 13.83                        # BEOL-top die-mount plane (TopMetal2 top = 10.83 + 3.00)
     io_pads:
       - id: J1
         io_class: wire_bond

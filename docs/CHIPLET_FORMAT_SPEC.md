@@ -214,6 +214,7 @@ The `components` section is an array of component definitions. Each component re
 | `orientation` | NO | String | `face_up` | Mounting orientation of a die: `face_up`, `flip_chip`, or `face_down`. Absent is treated as `face_up`. (`die` / `die_array`.) |
 | `connection` | NO | String | `""` | Interconnect method id this die mounts on (e.g. `cupillar_opt1`); references an entry in the interconnect method registry (`interconnect_methods.json`). Drives per-die z-mounting (contract section 3). (`die` / `die_array`.) |
 | `dimensions` | NO | Object | `{width:0, height:0, thickness:0}` | Physical size |
+| `attachment_surface_z` | NO | Float | - | **Interposer only.** Z of the die-attachment (BEOL-top) surface in the component-local frame: the plane dies mount on (`z_die = attachment_surface_z + connection height`). Decouples the mount reference from `dimensions.thickness` (the physical body). When absent, consumers fall back to `dimensions.thickness`. See the [coordinate-frame contract](./coord_frame_contract.md), sections 1.5 and 3. |
 | `io_pads` | NO | Array | `[]` | Assembly-level I/O pads (e.g. wire-bond pads), nested under the `interposer`. See [io_pads](#io_pads-interposer-only). |
 | `metadata` | NO | Map | `{}` | Custom key-value pairs |
 | `array` | NO | Object | - | Array config (die_array only) |
@@ -261,6 +262,15 @@ For dies it excludes the interconnect below the body: bump and pillar
 heights are modeled by the referenced `connection_stacks` entry, and
 the body extends upward from `position.z` (the seating plane; see
 `coord_frame_contract.md` section 1.4).
+
+For an **interposer**, `thickness` is the physical substrate body
+(Si + BEOL), and the die-mount plane is given separately by
+[`attachment_surface_z`](#common-fields); the body extends *downward*
+from that surface. Legacy interposer files omit `attachment_surface_z`
+and overload `thickness` as the mount reference (its historical
+meaning); readers fall back to `thickness` when the field is absent, so
+those files still seat dies correctly. See `coord_frame_contract.md`
+sections 1.5 and 3.4.
 
 ### Array Configuration (for `die_array` type)
 
@@ -620,6 +630,7 @@ flow:
 |------|------|-------------|
 | Coordinates (x, y, z) | micrometers | Floating-point position values |
 | Dimensions (width, height, thickness) | micrometers | Floating-point, must be >= 0 |
+| `attachment_surface_z` | micrometers | Floating-point (interposer only); typically > 0 |
 | Rotation (z) | degrees | 0-360 |
 | Array count (x, y) | - | Integer >= 1 |
 | Array pitch (x, y) | micrometers | Floating-point spacing |
@@ -678,7 +689,7 @@ consuming tool.
 **Reader behavior (warnings / fallbacks, not hard errors):**
 
 7. New files SHOULD declare `anchor:` on every component; a reader defaults an absent `anchor` to `bbox_center` and warns.
-8. If `connection` is specified it SHOULD name a known interconnect method; an absent or unresolved `connection` falls back to the interposer thickness (see the [coordinate-frame contract](./coord_frame_contract.md), section 3).
+8. If `connection` is specified it SHOULD name a known interconnect method; an absent or unresolved `connection` falls back to the interposer's `attachment_surface_z` (or `dimensions.thickness` when that field is absent, for legacy files) -- see the [coordinate-frame contract](./coord_frame_contract.md), section 3.
 9. A reader MUST warn (or reject) when any `position.x` or `position.y` exceeds `1e5` um in magnitude (heuristic for un-converted absolute coordinates).
 
 **Consumer / tool-level (NOT enforced by the reference library, which never touches the filesystem):**
@@ -824,3 +835,4 @@ components:
 | 1.0 | 2026-06-19 | Documentation reconciled with the reference libraries and [`coord_frame_contract.md`](./coord_frame_contract.md). Documented previously-undocumented parts of the existing `format_version` 1.0 schema: `assembly.assembly_gds`/`io_technology`, component `anchor`/`orientation`/`connection`/`cells`/`io_pads`, geometric-center `position` semantics, the per-die z-mounting rule, the `_metadata` intermediate-file guard, and the top-level `connection_stacks`, `interconnect`, `interfaces`, `netlist`, and `flow` blocks. Reorganized Validation Rules into reference-enforced vs consumer-level. Added a "Scope and relationship to other standards" section (CDXML / OCP-ODSA / JEDEC JEP30) and a proposed, non-normative `cdxml_ref` extension. No on-disk format change; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-06-19 | Editorial pass: aligned the File Structure skeleton with the Root Level Keys table (one required `assembly` block plus optional blocks; ten recognized keys), documented the full `orientation` vocabulary (`face_up`/`flip_chip`/`face_down`, `face_up` default and writer suppression) to match the reference, and removed non-ASCII dashes. No normative change. |
 | 1.0 | 2026-07-09 | Positioned `.chiplet` relative to 3Dblox / IEEE P3537 in the scope section (same physical-assembly layer; P&R vs mask abstraction; interop, not rivalry), added a proposed, non-normative `3dblox_ref` extension mirroring `cdxml_ref` (component-level only; no assembly-level `.3dbx` reference by design), and added the non-normative mapping appendix [`3dblox_interop.md`](./3dblox_interop.md). No on-disk format change; `format_version` stays `"1.0"`. |
+| 1.0 | 2026-07-21 | Added the optional interposer `attachment_surface_z` field: the die-attachment (BEOL-top) mount plane, decoupled from `dimensions.thickness`, which now carries the physical substrate body (extending downward from the attachment surface). Backward compatible: consumers fall back to `dimensions.thickness` as the mount reference when the field is absent, so legacy files seat dies unchanged. Updated the reference readers (C++ struct/parse/emit; the Python reader already passes it through) and the canonical example. No on-disk format change; `format_version` stays `"1.0"`. |

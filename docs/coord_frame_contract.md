@@ -162,6 +162,8 @@ questions and have different sources:
 | Field | Source | Meaning |
 |---|---|---|
 | `dimensions: width/height` | bbox of prBoundary 235/0 (the board outline, drawn from KiCad Edge.Cuts) when the layer is present; bbox of all drawn geometry otherwise (legacy GDS) | The fab extent of the interposer, what viewers render as the substrate body |
+| `dimensions: thickness` | KiCad stackup (`GetBoardThickness`) | The interposer's **physical body** z-extent (Si substrate + BEOL). It extends **downward** from `attachment_surface_z`: the die-mount plane is the top surface and the substrate body sits below it (local z goes negative). Legacy files without `attachment_surface_z` overload this field as the mount reference. |
+| `attachment_surface_z` | interposer stackup `attachment_surface_z` (13.83 for IntM4TM2 = TopMetal2 top 10.83 + 3.00) | The die-attachment (BEOL-top) surface z in the interposer-local frame: the plane dies mount on, `z_die = attachment_surface_z + connection height` (section 3). Optional; when absent, consumers fall back to `dimensions.thickness` as the mount reference. |
 | `position: x/y` | half of the **full** GDS bbox (all layers, outline included) | Where the mesh bbox center sits in the canonical frame (`anchor: bbox_center`, section 2) |
 
 When the outline contains all drawn geometry, the full bbox equals
@@ -221,7 +223,8 @@ components:
     dimensions:
       width: 6492.312  # board outline (prBoundary 235/0), see section 1.5
       height: 5602.001
-      thickness: 13.83
+      thickness: 300.0    # physical interposer body (KiCad stackup); see section 1.5
+    attachment_surface_z: 13.83   # BEOL-top die-mount plane; see sections 1.5, 3
 
   - id: U1
     type: die
@@ -349,14 +352,18 @@ method's body heights even when sibling dies use other methods.
 
 | Case | Behavior |
 |---|---|
-| Die has no `connection:` field | **Fallback**: use `interposer.thickness`, `connection_height = 0`. |
-| `connection` id not a defined connection stack | **Fallback**: use `interposer.thickness`, `connection_height = 0`. |
-| Connection's first layer not in interposer stackup (even after merge) | **Fallback**: use `interposer.thickness`. |
+| Die has no `connection:` field | **Fallback**: mount on `interposer.attachment_surface_z`, `connection_height = 0`. |
+| `connection` id not a defined connection stack | **Fallback**: mount on `interposer.attachment_surface_z`, `connection_height = 0`. |
+| Connection's first layer not in interposer stackup (even after merge) | **Fallback**: mount on `interposer.attachment_surface_z`. |
+| `interposer.attachment_surface_z` absent (legacy file) | **Fallback**: use `interposer.dimensions.thickness` as the mount reference (the pre-split behavior, when thickness doubled as the attachment surface). |
 | Die has `position.z` explicitly set non-zero | Use the explicit value, do not auto-calculate. |
 
-The earlier behavior of returning `0.0` for the no-connection / null-stack
-cases was a bug (it put dies at world z=0 instead of on the interposer body);
-the fallback above keeps the formula valid in all cases.
+The mount reference is `attachment_surface_z` when the interposer declares it,
+falling back to `dimensions.thickness` for files written before the field
+existed -- so both eras seat dies on the BEOL top, not on world z=0 (the
+earlier `0.0` return was a bug that put dies at the origin) and not on the
+substrate bottom (which is what reading the physical `thickness` would now
+give). The fallback keeps the formula valid in all cases.
 
 ---
 

@@ -148,6 +148,16 @@ struct Component {
     // consumer validates the value and owns the "missing anchor" warning.
     std::optional<std::string> anchor;
     Dimensions3D dimensions;
+    // Interposer die-attachment (BEOL-top) surface z, in the component's local
+    // frame: the plane dies mount on (a die's position.z == this +
+    // connection-stack height). std::nullopt when the field is absent, in
+    // which case consumers fall back to dimensions.thickness as the mount
+    // reference -- legacy files where thickness encoded the attachment
+    // surface. When present, dimensions.thickness is the physical body
+    // z-extent (the interposer substrate, extending downward from this
+    // surface), decoupled from the mount plane. See coord_frame_contract.md
+    // sections 3.2 / 3.4 / 5.5.
+    std::optional<double> attachment_surface_z;
     std::optional<ComponentArray> array;
     // Insertion-ordered key/value metadata.
     std::vector<std::pair<std::string, std::string>> metadata;

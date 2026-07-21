@@ -204,6 +204,55 @@ void test_source_has_no_gpl_or_qt_dependency() {
     check(!has_include_of(header, "yaml"), "header does not include yaml-cpp");
 }
 
+const cfio::Component* find_component(const cfio::ChipletDocument& doc,
+                                      const std::string& id) {
+    for (const auto& c : doc.components) {
+        if (c.id == id) return &c;
+    }
+    return nullptr;
+}
+
+bool near(double a, double b) { return (a > b ? a - b : b - a) < 1e-6; }
+
+// attachment_surface_z is the interposer's die-mount plane, decoupled from the
+// physical body thickness. This pins the parse AND the emit: without the writer
+// change a consumer that re-saves the file would silently drop the mount
+// reference (the fixed-point test above cannot catch that -- the field is gone
+// on the first load, so d1 already lacks it).
+void test_attachment_surface_z_roundtrip() {
+    const std::string path = kExamplesDir + "/interposer_demo_design.chiplet";
+    cfio::ChipletDocument doc = cfio::load(path);
+
+    const cfio::Component* interposer = find_component(doc, "interposer");
+    check(interposer != nullptr, "example has an interposer component");
+    if (interposer) {
+        check(interposer->attachment_surface_z.has_value(),
+              "interposer carries attachment_surface_z");
+        check(near(interposer->attachment_surface_z.value_or(0.0), 13.83),
+              "interposer attachment_surface_z is 13.83");
+        // thickness is now the physical body, decoupled from the mount plane.
+        check(near(interposer->dimensions.thickness, 300.0),
+              "interposer thickness is the physical body, not the mount ref");
+    }
+
+    // A die carries no attachment surface -> nullopt (consumers fall back to
+    // thickness). Absence is representable, not coerced to 0.
+    const cfio::Component* die = find_component(doc, "U1");
+    check(die != nullptr, "example has die U1");
+    if (die) {
+        check(!die->attachment_surface_z.has_value(),
+              "a die has no attachment_surface_z");
+    }
+
+    // The value survives dump->load: the writer must emit it.
+    cfio::ChipletDocument reloaded = cfio::loads(cfio::dumps(doc));
+    const cfio::Component* interposer2 = find_component(reloaded, "interposer");
+    check(interposer2 != nullptr &&
+              interposer2->attachment_surface_z.has_value() &&
+              near(interposer2->attachment_surface_z.value(), 13.83),
+          "attachment_surface_z survives dump/load");
+}
+
 }  // namespace
 
 int main() {
@@ -216,6 +265,7 @@ int main() {
     test_component_requires_id_and_type();
     test_intermediate_refused_then_allowed();
     test_dump_roundtrips_components_order();
+    test_attachment_surface_z_roundtrip();
     test_unknown_interface_type_rejected();
     test_flow_block_preserved();
     test_interconnect_adapter_and_technology();
