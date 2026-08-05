@@ -165,6 +165,7 @@ The `technologies` section defines fabrication processes used by components. Eac
 |-----|----------|------|---------|-------------|
 | `description` | NO | String | `""` | Technology description |
 | `layer_properties` | NO | String | `""` | Path to KLayout `.lyp` file |
+| `stackup` | NO | String | `""` | Path to a layer-stackup YAML this technology ships |
 | `dbu` | NO | Float | `0.001` | Database unit in micrometers |
 
 ### Example
@@ -179,6 +180,7 @@ technologies:
   interposer_65nm:
     description: "65nm Silicon Interposer"
     layer_properties: "./tech/interposer.lyp"
+    stackup: "${INTERPOSER_PDK_ROOT}/libs.tech/chiplet_studio/intm4tm2.stackup.yaml"
     dbu: 0.001
 
   organic_substrate:
@@ -190,6 +192,13 @@ technologies:
 
 - Technology IDs must be unique within the file
 - `layer_properties` paths are resolved relative to the `.chiplet` file location
+- `stackup` is resolved through the same chain as `layer_properties`: `${VAR}`
+  expansion first, then an absolute path is taken as-is and a relative path is
+  taken relative to the `.chiplet` file location. A writer round-trips the
+  verbatim string it read, not the resolved one
+- `stackup` lets a technology the consumer has no built-in stackup for still
+  render with a real one. Where a consumer has its own lookup keyed on the
+  technology id, an explicit `stackup` takes priority over it
 - `dbu` (database unit) defines coordinate resolution in the referenced layout files
 
 ---
@@ -835,4 +844,5 @@ components:
 | 1.0 | 2026-06-19 | Documentation reconciled with the reference libraries and [`coord_frame_contract.md`](./coord_frame_contract.md). Documented previously-undocumented parts of the existing `format_version` 1.0 schema: `assembly.assembly_gds`/`io_technology`, component `anchor`/`orientation`/`connection`/`cells`/`io_pads`, geometric-center `position` semantics, the per-die z-mounting rule, the `_metadata` intermediate-file guard, and the top-level `connection_stacks`, `interconnect`, `interfaces`, `netlist`, and `flow` blocks. Reorganized Validation Rules into reference-enforced vs consumer-level. Added a "Scope and relationship to other standards" section (CDXML / OCP-ODSA / JEDEC JEP30) and a proposed, non-normative `cdxml_ref` extension. No on-disk format change; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-06-19 | Editorial pass: aligned the File Structure skeleton with the Root Level Keys table (one required `assembly` block plus optional blocks; ten recognized keys), documented the full `orientation` vocabulary (`face_up`/`flip_chip`/`face_down`, `face_up` default and writer suppression) to match the reference, and removed non-ASCII dashes. No normative change. |
 | 1.0 | 2026-07-09 | Positioned `.chiplet` relative to 3Dblox / IEEE P3537 in the scope section (same physical-assembly layer; P&R vs mask abstraction; interop, not rivalry), added a proposed, non-normative `3dblox_ref` extension mirroring `cdxml_ref` (component-level only; no assembly-level `.3dbx` reference by design), and added the non-normative mapping appendix [`3dblox_interop.md`](./3dblox_interop.md). No on-disk format change; `format_version` stays `"1.0"`. |
+| 1.0 | 2026-08-05 | Documented the optional technology `stackup` field: a path to a layer-stackup YAML the technology ships itself, resolved through the same `${VAR}`/relative chain as `layer_properties` and taking priority over a consumer's own stackup lookup for that technology id. The field was already read, written and relied on by Chiplet Studio; it had never been written down here, so the reference C++ reader dropped it on a round-trip while a consumer's vendored copy carried it. Updated the C++ reference (struct/parse/emit); the Python reader already passes it through. Backward compatible and optional; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-07-21 | Added the optional interposer `attachment_surface_z` field: the die-attachment (BEOL-top) mount plane, decoupled from `dimensions.thickness`, which now carries the physical substrate body (extending downward from the attachment surface). Backward compatible: consumers fall back to `dimensions.thickness` as the mount reference when the field is absent, so legacy files seat dies unchanged. Updated the reference readers (C++ struct/parse/emit; the Python reader already passes it through) and the canonical example. No on-disk format change; `format_version` stays `"1.0"`. |

@@ -89,6 +89,12 @@ struct Technology {
     std::string id;              // map key in the YAML
     std::string description;
     std::string layer_properties;  // verbatim path to the .lyp
+    // Optional path to a layer-stackup YAML this technology ships. Verbatim as
+    // read: the consumer resolves it through the same ${VAR}/relative chain as
+    // layer_properties, and an explicit value takes priority over whatever
+    // stackup the consumer would otherwise look up for this id. Empty means the
+    // field was absent.
+    std::string stackup;
     double dbu = 0.001;
     bool has_dbu = false;        // whether dbu was present in the file
 };
