@@ -17,3 +17,11 @@ dependencies = ["PyYAML>=5.1"]
 
 [tool.setuptools]
 packages = ["chiplet_format_io"]
+
+[tool.pytest.ini_options]
+# This suite needs nothing but PyYAML, so it should never skip. -ra is here so
+# that if one ever starts to, the log says why rather than quietly shrinking the
+# passed count. --strict-markers and --strict-config turn a typo in a marker or
+# an ini key into an error instead of a silently ignored line.
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests"]
