@@ -53,6 +53,7 @@ Technology parse_technology(const std::string& id, const YAML::Node& node) {
     tech.id = id;
     tech.description = as_or<std::string>(node, "description", "");
     tech.layer_properties = as_or<std::string>(node, "layer_properties", "");
+    tech.stackup = as_or<std::string>(node, "stackup", "");
     if (node["dbu"] && !node["dbu"].IsNull()) {
         tech.dbu = node["dbu"].as<double>(0.001);
         tech.has_dbu = true;
@@ -285,6 +286,11 @@ void emit_technology_fields(YAML::Emitter& out, const Technology& tech) {
     if (!tech.layer_properties.empty()) {
         out << YAML::Key << "layer_properties" << YAML::Value
             << tech.layer_properties;
+    }
+    // Emitted only when engaged, so a technology without a stackup round-trips
+    // without gaining a key it never had.
+    if (!tech.stackup.empty()) {
+        out << YAML::Key << "stackup" << YAML::Value << tech.stackup;
     }
     if (tech.has_dbu) {
         out << YAML::Key << "dbu" << YAML::Value << tech.dbu;

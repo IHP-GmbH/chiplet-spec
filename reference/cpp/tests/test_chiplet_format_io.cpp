@@ -172,6 +172,51 @@ void test_interconnect_adapter_and_technology() {
           "interconnect technology is discoverable via lookup");
 }
 
+// technologies.<id>.stackup is the path to a stackup YAML a technology ships
+// itself. This pins the emit as much as the parse: a consumer that re-saves a
+// file whose technology declares one must not drop it, which is exactly what
+// this reference did before the field was documented.
+void test_technology_stackup_roundtrip() {
+    const std::string doc =
+        "format_version: \"1.0\"\nassembly:\n  name: a\n"
+        "technologies:\n"
+        "  intm4tm2:\n"
+        "    description: interposer\n"
+        "    layer_properties: ./tech/intm4tm2.lyp\n"
+        "    stackup: ${INTERPOSER_PDK_ROOT}/libs.tech/chiplet_studio/intm4tm2.stackup.yaml\n"
+        "    dbu: 0.001\n"
+        "  sg13g2:\n"
+        "    description: die\n"
+        "    dbu: 0.001\n";
+    cfio::ChipletDocument parsed = cfio::loads(doc);
+
+    const cfio::Technology* interposer = parsed.technology("intm4tm2");
+    check(interposer != nullptr, "technology intm4tm2 parsed");
+    if (interposer) {
+        // Verbatim, not resolved: the ${VAR} is the consumer's to expand.
+        check(interposer->stackup ==
+                  "${INTERPOSER_PDK_ROOT}/libs.tech/chiplet_studio/"
+                  "intm4tm2.stackup.yaml",
+              "stackup is kept verbatim");
+    }
+
+    // Absence stays absence, and must not become an emitted empty key.
+    const cfio::Technology* die = parsed.technology("sg13g2");
+    check(die != nullptr, "technology sg13g2 parsed");
+    if (die) {
+        check(die->stackup.empty(), "a technology without a stackup has none");
+    }
+
+    const std::string emitted = cfio::dumps(parsed);
+    cfio::ChipletDocument reloaded = cfio::loads(emitted);
+    const cfio::Technology* interposer2 = reloaded.technology("intm4tm2");
+    check(interposer2 != nullptr && interposer2->stackup == interposer->stackup,
+          "stackup survives dump/load");
+    const cfio::Technology* die2 = reloaded.technology("sg13g2");
+    check(die2 != nullptr && die2->stackup.empty(),
+          "a technology without a stackup does not gain one on a round trip");
+}
+
 // True if any `#include` directive in `text` mentions `token`. Prose comments
 // that merely name a library (e.g. documenting the dependency-clean intent) do
 // not count -- only actual include directives.
@@ -269,6 +314,7 @@ int main() {
     test_unknown_interface_type_rejected();
     test_flow_block_preserved();
     test_interconnect_adapter_and_technology();
+    test_technology_stackup_roundtrip();
     test_source_has_no_gpl_or_qt_dependency();
 
     std::cout << g_checks << " checks, " << g_failures << " failures\n";
