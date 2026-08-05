@@ -1,0 +1,105 @@
+name: tests
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The Python reference is the one installable package in the ecosystem, and it
+  # is vendored verbatim into IHP-Open-ADK. Install it the way a consumer would
+  # rather than putting the source directory on sys.path, so a packaging mistake
+  # fails here and not in the consumer.
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: reference/python/pyproject.toml
+
+      - name: Install the reference package
+        run: pip install ./reference/python pytest
+
+      - name: Run tests
+        working-directory: reference/python
+        run: pytest -q
+
+  # The C++ reference had enable_testing() and a ctest target that nothing ever
+  # invoked, in the upstream of two vendored copies. This is that target running.
+  cpp:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yaml-cpp
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libyaml-cpp-dev
+
+      - name: Configure
+        run: cmake -S reference/cpp -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
+  # Machine-readable artifacts are the point of this repository, so a file that
+  # does not parse is a release-blocking defect, not a style problem.
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every JSON artifact parses
+        run: |
+          status=0
+          while IFS= read -r f; do
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f" \
+              || { echo "::error file=$f::not valid JSON"; status=1; }
+          done < <(git ls-files '*.json')
+          exit $status
+
+      - name: Every example .chiplet parses through the reference reader
+        # An example that the reference cannot read is a broken example or a
+        # broken reference, and either way it ships from here to every consumer.
+        run: |
+          pip install ./reference/python
+          status=0
+          for f in examples/*.chiplet; do
+            python3 -c 'import sys, chiplet_format_io as cfio; cfio.load(sys.argv[1], allow_intermediate=True)' "$f" \
+              || { echo "::error file=$f::reference reader rejected it"; status=1; }
+          done
+          exit $status
+
+      - name: REUSE compliance
+        # The repository carries .reuse/ and LICENSES/ but nothing checked them,
+        # so a new file without an SPDX header was only ever caught by review.
+        run: |
+          pip install reuse
+          reuse lint
+
+  ci-gate:
+    needs: [python, cpp, static]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every gating job to have succeeded
+        run: |
+          echo "python: ${{ needs.python.result }}"
+          echo "cpp:    ${{ needs.cpp.result }}"
+          echo "static: ${{ needs.static.result }}"
+          test "${{ needs.python.result }}" = "success"
+          test "${{ needs.cpp.result }}" = "success"
+          test "${{ needs.static.result }}" = "success"
