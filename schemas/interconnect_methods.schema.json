@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://ihp.example/interconnect_pdk/interconnect_methods.schema.json",
   "title": "Interconnect method registry",
-  "description": "Schema for interconnect_methods.json. Structural validation only; cross-field invariants (unique GDS (layer,datatype), connection_stack layer names present in layer_registry, default_connection_library entries present in methods) are checked by python/tests/test_manifest.py.",
+  "description": "Schema for interconnect_methods.json. Structural validation only; cross-field invariants (unique GDS (layer,datatype); connection_stack layer names present in layer_registry; default_connection_library entries present in methods; connection_stack names match layers_3d; stack layer diameter equals body_diameter_um; interconnect_rules.json mirrors pitch_rules/fab_params) are checked by libs.tech/klayout/interconnect_tests/test_manifest.py.",
   "type": "object",
   "required": ["schema_version", "pdk", "default_method", "default_connection_library", "layer_registry", "fab_anchors", "methods"],
   "additionalProperties": true,
