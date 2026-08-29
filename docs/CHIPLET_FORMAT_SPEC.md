@@ -106,7 +106,7 @@ components:              # optional
 
 | Key | Required | Type | Description |
 |-----|----------|------|-------------|
-| `format_version` | **YES** | String | Format version, currently `"1.0"` |
+| `format_version` | **YES** | String | Quoted `"MAJOR.MINOR"`; baseline `"1.0"`. Readers are tolerant of a same-major higher minor (warn), reject a different major. See the validation rules below. |
 | `assembly` | **YES** | Object | Assembly metadata |
 | `technologies` | NO | Map | Technology definitions |
 | `connection_stacks` | NO | Map | Named interconnect stacks (see [Connection Stacks](#connection-stacks)) |
@@ -688,7 +688,19 @@ consuming tool.
 
 **Enforced by the reference validator (hard errors):**
 
-1. `format_version` must be `"1.0"`.
+1. `format_version` is checked by a tolerant policy, not by exact-string equality.
+   The on-disk baseline stays `"1.0"` (the format grows additively under it). A
+   reader accepts the same major with a minor at or below the one it supports;
+   accepts a same-major *higher* minor with a warning (reading it as the
+   supported version and ignoring unknown additions); and rejects a different
+   major (higher or lower) or a malformed value as a hard error. The field MUST
+   be a quoted `"MAJOR.MINOR"` string; an unquoted numeric is coerced through
+   `str()` for back-compat, which is exactly where PyYAML (`1.10` -> `"1.1"`) and
+   yaml-cpp (`1.10` -> `"1.10"`) diverge, so quote it. A *lossless* passthrough
+   writer preserves a same-major higher minor it was handed (the stamped version
+   must describe the bytes written); a *lossy* writer that reconstructs from a
+   struct model stamps the supported version, because it may have dropped
+   fields it did not understand.
 2. `assembly.name` is required and must not be empty.
 3. Every component has a non-empty `id` and a non-empty `type`.
 4. Every `interfaces[]` entry has an `id` and a `type`, and the `type` is one of `micro_bump`, `copper_pillar`, `tsv`, `wire_bond` (an unknown type is rejected). *C++ reference only; the Python reference validator does not check the interface-type vocabulary and accepts an unknown type.*

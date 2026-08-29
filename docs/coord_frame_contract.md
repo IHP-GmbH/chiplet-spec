@@ -487,6 +487,13 @@ Every tool that reads a `.chiplet` file MUST:
 3. Validate position values are in plausible range; warn loudly if
    any `position.x` or `position.y` exceeds 1e5 um (heuristic
    indicator of HYP-absolute leakage).
+4. Apply the tolerant `format_version` policy, not exact-string equality
+   (`chiplet_format_io.check_format_version` is the single reference): accept a
+   same-major minor at or below the supported one; accept a same-major higher
+   minor with a warning; reject a different major or a malformed value. The
+   baseline stays `"1.0"`. A lossless passthrough writer re-emits the version it
+   was handed (preserving a higher minor); a struct-model (lossy) writer stamps
+   the supported version.
 
 The repo-local reference libraries (`reference/cpp`, `reference/python`) do
 **not** satisfy these reader requirements on their own: they are structural-only
@@ -500,8 +507,9 @@ that needs the full contract must add the frame semantics on top, as the
 `ChipletFormat::load` delegates parsing and structural validation to the
 vendored reference library (`cfio::load`, `src/formats/chiplet_format_io/`)
 and re-throws `cfio::ChipletFormatError` as `ChipletFormatException` so
-callers' contracts hold. The library owns the YAML grammar, the
-`format_version` gate, and the intermediate-file guard; `ChipletFormat.cpp`
+callers' contracts hold. The library owns the YAML grammar, the tolerant
+`format_version` gate (same-major-higher-minor accepted with a warning, a
+different major rejected), and the intermediate-file guard; `ChipletFormat.cpp`
 adds the frame/anchor semantics:
 
 - Parse the `anchor:` field per component. Absent leaves the `BboxCenter`

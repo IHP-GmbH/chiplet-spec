@@ -298,6 +298,53 @@ void test_attachment_surface_z_roundtrip() {
           "attachment_surface_z survives dump/load");
 }
 
+// --- H-B: tolerant format_version policy (parity with the Python matrix) ---
+
+void test_higher_minor_warns_and_accepts() {
+    const std::string text = "format_version: \"1.1\"\nassembly:\n  name: a\n";
+    std::vector<std::string> sink;
+    cfio::LoadOptions opts;
+    opts.on_warn = [&sink](const std::string& m) { sink.push_back(m); };
+    cfio::ChipletDocument doc = cfio::loads(text, opts);
+    check(doc.format_version == "1.1",
+          "same-major higher minor is accepted");
+    check(!doc.warnings.empty(),
+          "higher minor records a per-document warning");
+    check(sink.size() == 1, "higher minor fires the on_warn sink exactly once");
+}
+
+void test_lower_and_higher_major_rejected() {
+    check_throws([] {
+        cfio::loads("format_version: \"2.0\"\nassembly:\n  name: a\n");
+    }, "2.0 (higher major) rejected");
+    check_throws([] {
+        cfio::loads("format_version: \"0.9\"\nassembly:\n  name: a\n");
+    }, "0.9 (lower major) rejected");
+}
+
+void test_malformed_version_rejected() {
+    check_throws([] {
+        cfio::loads("format_version: \"1\"\nassembly:\n  name: a\n");
+    }, "\"1\" (no minor) rejected");
+    check_throws([] {
+        cfio::loads("format_version: \"1.0.0\"\nassembly:\n  name: a\n");
+    }, "\"1.0.0\" (three parts) rejected");
+}
+
+void test_typed_writer_stamps_supported_for_higher_minor() {
+    // The C++ struct writer is lossy (unknown top-level keys are not carried),
+    // so a "1.1" input is written back as the supported "1.0" -- the OPPOSITE of
+    // the Python passthrough writer, and the impl-class distinction the
+    // conformance manifest encodes.
+    const std::string text = "format_version: \"1.1\"\nassembly:\n  name: a\n";
+    cfio::LoadOptions opts;
+    opts.allow_intermediate = true;
+    cfio::ChipletDocument doc = cfio::loads(text, opts);
+    cfio::ChipletDocument reloaded = cfio::loads(cfio::dumps(doc));
+    check(reloaded.format_version == cfio::SUPPORTED_FORMAT_VERSION,
+          "typed/lossy writer stamps SUPPORTED for a higher-minor input");
+}
+
 }  // namespace
 
 int main() {
@@ -315,6 +362,10 @@ int main() {
     test_flow_block_preserved();
     test_interconnect_adapter_and_technology();
     test_technology_stackup_roundtrip();
+    test_higher_minor_warns_and_accepts();
+    test_lower_and_higher_major_rejected();
+    test_malformed_version_rejected();
+    test_typed_writer_stamps_supported_for_higher_minor();
     test_source_has_no_gpl_or_qt_dependency();
 
     std::cout << g_checks << " checks, " << g_failures << " failures\n";

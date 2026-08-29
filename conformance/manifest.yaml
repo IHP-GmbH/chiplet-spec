@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 IHP GmbH
+#
+# Conformance corpus: the format_version policy (H-B seed, format-level, public).
+# Home for the format-level fixtures per CHIPLET_FLOW_DEV_GUIDELINES Lane 2.
+# Verdict-level (H-C) fixtures live elsewhere behind the embargo gate and are
+# NOT part of this file.
+#
+# Implementation-class dimension (REQUIRED, fable change 6): the read verdict
+# (accept/warn/refuse) and the normalized version apply to EVERY reader and are
+# the cross-implementation parity contract. The writer and round-trip
+# expectations are class-specific:
+#   * passthrough readers/writers keep a lossless dict, so an unknown top-level
+#     key round-trips and a same-major higher minor is preserved on write;
+#   * typed readers/writers reconstruct from a struct model, so unknown keys are
+#     dropped BY DESIGN (the 2026-08-05 stackup loss) and writers stamp SUPPORTED.
+# An expectation tagged `passthrough_only: true` is checked only against a
+# passthrough implementation and skipped (not failed) for a typed one.
+
+# interposer_pnr_ir reads into a typed model but retains the raw dict and writes
+# it back (write_assembly dumps assembly.raw), so it is passthrough for
+# round-trip and writer purposes; only the C++ struct reader is typed-lossy
+# (no raw retention). ir's writer parity is asserted in interposer-pnr's suite.
+implementations:
+  reference_python:   {class: passthrough, writes: true}
+  interposer_pnr_ir:  {class: passthrough, writes: true}
+  reference_cpp:      {class: typed,       writes: true}
+
+fixtures:
+  - file: v1_0_baseline.chiplet
+    expect: accept
+    version: "1.0"
+    writer: stamp_supported
+
+  - file: v1_0_unquoted_numeric.chiplet
+    expect: accept
+    version: "1.0"
+    note: >-
+      Unquoted 1.0 is coerced through str(). PyYAML renders unquoted 1.10 as
+      "1.1" while yaml-cpp keeps "1.10"; the spec says the field MUST be quoted.
+
+  - file: v1_0_additive_unknown_key.chiplet
+    expect: accept
+    version: "1.0"
+    roundtrip_key: future_block
+    roundtrip_key_passthrough_only: true
+
+  - file: v1_1_higher_minor.chiplet
+    expect: warn
+    version: "1.1"
+    writer: preserve_input
+    writer_passthrough_only: true
+    note: >-
+      Passthrough writers preserve "1.1" and re-warn; typed writers stamp "1.0"
+      because they may have dropped 1.1-only fields (the stamped version must
+      describe the bytes written).
+
+  - file: v2_0_higher_major.chiplet
+    expect: refuse
+
+  - file: v0_9_lower_major.chiplet
+    expect: refuse
+
+  - file: v1_0_missing_version.chiplet
+    expect: refuse
+
+  - file: v1_0_malformed_version.chiplet
+    expect: refuse

@@ -250,18 +250,39 @@ Netlist parse_netlist(const YAML::Node& node) {
     return nl;
 }
 
+// Parse a "MAJOR.MINOR" version string into (major, minor). Returns nullopt for
+// anything that is not exactly two non-negative integers separated by one dot.
+// Note: yaml-cpp keeps a quoted "1.10" verbatim (-> 1,10), where PyYAML would
+// have folded an UNQUOTED 1.10 to "1.1"; the spec requires the field be quoted.
+std::optional<std::pair<int, int>> parse_version_parts(const std::string& fv) {
+    const auto dot = fv.find('.');
+    if (dot == std::string::npos || fv.find('.', dot + 1) != std::string::npos) {
+        return std::nullopt;  // zero dots, or more than one
+    }
+    const std::string majs = fv.substr(0, dot);
+    const std::string mins = fv.substr(dot + 1);
+    if (majs.empty() || mins.empty()) return std::nullopt;
+    auto all_digits = [](const std::string& s) {
+        for (char c : s) if (c < '0' || c > '9') return false;
+        return true;
+    };
+    if (!all_digits(majs) || !all_digits(mins)) return std::nullopt;
+    try {
+        return std::make_pair(std::stoi(majs), std::stoi(mins));
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
 // Up-front document gate: fail fast on the document-level invariants exactly
 // where the C++ host reader does, before any section is consumed.
 void check_document_gate(const YAML::Node& root, const std::string& formatVersion,
-                         const Metadata& metadata, bool allow_intermediate) {
+                         const Metadata& metadata, bool allow_intermediate,
+                         const std::function<void(const std::string&)>& on_warn) {
     if (!root["format_version"]) {
         throw ChipletFormatError("missing required key: format_version");
     }
-    if (formatVersion != SUPPORTED_FORMAT_VERSION) {
-        throw ChipletFormatError("unsupported format_version '" + formatVersion +
-                                 "'; this reader supports \"" +
-                                 std::string(SUPPORTED_FORMAT_VERSION) + "\"");
-    }
+    check_format_version(formatVersion, on_warn);
     if (metadata.finalize_required && !allow_intermediate) {
         const std::string finalizer = metadata.finalizer.empty()
             ? "hyp_to_gds.py --update-chiplet-file" : metadata.finalizer;
@@ -299,6 +320,36 @@ void emit_technology_fields(YAML::Emitter& out, const Technology& tech) {
 
 }  // namespace
 
+std::string check_format_version(
+    const std::string& fv,
+    const std::function<void(const std::string&)>& on_warn) {
+    const auto parsed = parse_version_parts(fv);
+    if (!parsed) {
+        throw ChipletFormatError(
+            "malformed format_version '" + fv +
+            "'; expected a quoted \"MAJOR.MINOR\" string");
+    }
+    const int major = parsed->first;
+    const int minor = parsed->second;
+    const auto supported = parse_version_parts(SUPPORTED_FORMAT_VERSION);
+    if (major != supported->first) {
+        throw ChipletFormatError(
+            "unsupported format_version '" + fv + "'; this reader supports major " +
+            std::to_string(supported->first) + " (e.g. \"" +
+            std::string(SUPPORTED_FORMAT_VERSION) + "\")");
+    }
+    const std::string normalized =
+        std::to_string(major) + "." + std::to_string(minor);
+    if (minor > supported->second && on_warn) {
+        on_warn("format_version '" + fv + "' is newer than this reader's \"" +
+                std::string(SUPPORTED_FORMAT_VERSION) + "\" (same major " +
+                std::to_string(major) + "); reading it as \"" +
+                std::string(SUPPORTED_FORMAT_VERSION) +
+                "\" and ignoring unknown additions");
+    }
+    return normalized;
+}
+
 const Technology* ChipletDocument::technology(const std::string& id) const {
     for (const auto& t : technologies) {
         if (t.id == id) return &t;
@@ -310,12 +361,9 @@ const Technology* ChipletDocument::technology(const std::string& id) const {
     return nullptr;
 }
 
-void validate(const ChipletDocument& doc, bool allow_intermediate) {
-    if (doc.format_version != SUPPORTED_FORMAT_VERSION) {
-        throw ChipletFormatError("unsupported format_version '" +
-                                 doc.format_version + "'; expected \"" +
-                                 std::string(SUPPORTED_FORMAT_VERSION) + "\"");
-    }
+void validate(const ChipletDocument& doc, bool allow_intermediate,
+              const std::function<void(const std::string&)>& on_warn) {
+    check_format_version(doc.format_version, on_warn);
     if (doc.metadata.finalize_required && !allow_intermediate) {
         const std::string finalizer = doc.metadata.finalizer.empty()
             ? "hyp_to_gds.py --update-chiplet-file" : doc.metadata.finalizer;
@@ -378,9 +426,16 @@ ChipletDocument loads(const std::string& text, const LoadOptions& opts) {
             as_or<std::string>(root["_metadata"], "finalizer", "");
     }
 
+    // Non-fatal reader notes (a same-major higher minor) land on the document
+    // and, when the caller supplied one, on opts.on_warn. Never stderr, never a
+    // throw (fatal conditions throw ChipletFormatError instead).
+    auto warn_sink = [&doc, &opts](const std::string& msg) {
+        doc.warnings.push_back(msg);
+        if (opts.on_warn) opts.on_warn(msg);
+    };
     if (opts.validate) {
         check_document_gate(root, doc.format_version, doc.metadata,
-                            opts.allow_intermediate);
+                            opts.allow_intermediate, warn_sink);
     }
 
     if (root["assembly"]) {
@@ -476,8 +531,13 @@ std::string dumps(const ChipletDocument& doc, const DumpOptions& opts) {
     YAML::Emitter out;
     out << YAML::BeginMap;
 
-    const std::string fv =
-        doc.format_version.empty() ? SUPPORTED_FORMAT_VERSION : doc.format_version;
+    // Lossy writer (H-B crux): this reconstructs YAML from the struct model,
+    // which does NOT carry unknown top-level keys, so it stamps its own
+    // supported version rather than echoing a possibly-higher input version --
+    // the stamped version must describe the bytes written, and these bytes are
+    // supported-version content. (A lossless passthrough writer preserves a
+    // higher minor; this is not one.)
+    const std::string fv = SUPPORTED_FORMAT_VERSION;
     out << YAML::Key << "format_version" << YAML::Value << YAML::DoubleQuoted << fv;
 
     if (doc.metadata.finalize_required || !doc.metadata.finalizer.empty()) {

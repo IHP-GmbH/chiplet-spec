@@ -28,6 +28,7 @@
 #ifndef CHIPLET_FORMAT_IO_HPP
 #define CHIPLET_FORMAT_IO_HPP
 
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -36,9 +37,20 @@
 
 namespace chiplet_format_io {
 
-// The only format_version this reference implementation understands. Bump
-// together with docs/CHIPLET_FORMAT_SPEC.md and the Python reference library.
+// The highest format_version this reference implementation was written for. The
+// on-disk baseline stays additive-stable at "1.0"; readers are tolerant of a
+// same-major higher minor (see check_format_version). Bump together with
+// docs/CHIPLET_FORMAT_SPEC.md and the Python reference library.
 inline constexpr const char* SUPPORTED_FORMAT_VERSION = "1.0";
+
+// Apply the tolerant format_version policy (parity-bound to the Python
+// check_format_version): missing/malformed or a different major throws
+// ChipletFormatError; a same-major minor <= supported is accepted silently; a
+// same-major higher minor is accepted and, when on_warn is set, reported through
+// it (never stderr, never a throw). Returns the normalized "MAJOR.MINOR".
+std::string check_format_version(
+    const std::string& fv,
+    const std::function<void(const std::string&)>& on_warn = {});
 
 // Raised when a .chiplet document is malformed or unsupported. Named to mirror
 // the Python ChipletFormatError. Host tools that wrap this library translate it
@@ -237,6 +249,11 @@ struct ChipletDocument {
     bool has_flow = false;
     std::string flow_yaml;                 // verbatim YAML of the `flow` block
 
+    // Non-fatal reader notes (e.g. a same-major higher-minor format_version).
+    // Per-document, so there is no global state and a GUI host can surface them
+    // however it likes; never written to stderr by the library.
+    std::vector<std::string> warnings;
+
     // Convenience lookup; returns nullptr if no technology with that id exists.
     const Technology* technology(const std::string& id) const;
 };
@@ -244,6 +261,9 @@ struct ChipletDocument {
 struct LoadOptions {
     bool allow_intermediate = false;  // accept _metadata.finalize_required files
     bool validate = true;             // run semantic validation after parsing
+    // Optional sink for non-fatal reader notes. When unset, notes still land in
+    // ChipletDocument::warnings. Never called with a fatal condition (those throw).
+    std::function<void(const std::string&)> on_warn;
 };
 
 struct DumpOptions {
@@ -271,7 +291,8 @@ void dump(const ChipletDocument& doc, const std::string& path,
 // interface id/type, netlist net.name). Structural checks (a section being a
 // map vs a sequence) happen during parsing. Throws ChipletFormatError on the
 // first violation. Set allow_intermediate to accept finalize_required documents.
-void validate(const ChipletDocument& doc, bool allow_intermediate = false);
+void validate(const ChipletDocument& doc, bool allow_intermediate = false,
+              const std::function<void(const std::string&)>& on_warn = {});
 
 }  // namespace chiplet_format_io
 
