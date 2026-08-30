@@ -45,6 +45,16 @@ fixtures:
     roundtrip_key: future_block
     roundtrip_key_passthrough_only: true
 
+  - file: v1_0_assembly_two_die.chiplet
+    expect: accept
+    version: "1.0"
+    note: >-
+      A complete R1-emitted assembly (two SG13G2 dies on an IntM4TM2 interposer,
+      full components + netlist), not a version stub: proves every reader accepts
+      a realistic 1.0 document and normalizes to 1.0. Format-level ACCEPT,
+      class-agnostic (no round-trip or writer expectation), so it is checked
+      identically for passthrough and typed readers.
+
   - file: v1_1_higher_minor.chiplet
     expect: warn
     version: "1.1"
