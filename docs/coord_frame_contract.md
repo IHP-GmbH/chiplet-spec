@@ -47,7 +47,10 @@ are the regression net that proves the behavior described here.
 1. All `position:` values in a `.chiplet` file are expressed in
    **GDS-bbox-corner of the interposer top_cell**, y-up cartesian,
    units micrometers.
-2. `position:` is the component's **geometric center**, not its corner.
+2. `position:` places the component's **anchor reference point**
+   (item 3, section 2.1): the center of its GDS bbox for
+   `anchor: bbox_center`, its own GDS (0,0) for `anchor: gds_origin`.
+   It is the geometric center only in the `bbox_center` case.
 3. Each component declares an explicit `anchor:` field:
    - `anchor: gds_origin`, the component mesh is built around its own
      GDS (0,0). Used by dies produced by `gds_to_kicad`.
@@ -129,7 +132,10 @@ y-up, in um.
 
 ### 1.4 Position semantics
 
-`position:` refers to the component's **geometric center** in X and Y.
+`position:` places the component's **anchor reference point** in X and Y
+(section 2.1). For `anchor: bbox_center` that is the component's geometric
+center; for `anchor: gds_origin` it is the component's own GDS (0,0),
+wherever that origin sits in the artwork.
 
 In Z, `position.z` is the component's **seating plane**: the bottom
 face of the placed body, the one that meets the mounting surface (for
@@ -141,8 +147,8 @@ coincide; with a real thickness they differ by `thickness / 2`, and
 the seating-plane reading is the normative one: it is what the
 z-mounting rule computes and what consumers implement.
 
-For a die of width 1000 um and height 2000 um placed with its
-lower-left corner at (250, 250) inside the interposer:
+For a `bbox_center` die of width 1000 um and height 2000 um placed with
+its lower-left corner at (250, 250) inside the interposer:
 ```yaml
 position:
   x: 750.0      # 250 + 1000/2
@@ -235,7 +241,7 @@ components:
     layout: ${GDS_TO_KICAD_ROOT}/.../Metal_Test.gds
     top_cell: Metal_Test
     position:
-      x: 1954.121     # die center in interposer-local frame
+      x: 1954.121     # where the die's GDS (0,0) lands (anchor: gds_origin)
       y: 2332.483
       z: 57.83        # 13.83 + 44 (cupillar_opt1), see section 3
     dimensions:
@@ -786,3 +792,4 @@ in `.chiplet` files.
 | 1.1 | 2026-06-18 | Mauricio Montanares | Updated to the two-die mixed-method demo (U1 cupillar_opt1 z=57.83, U2 vendorx_microbump z=37.83); documented per-die fragment merge in calculate_component_z; corrected interposer technology to intm4tm2 and demo dimensions; moved finalizer/check paths to chiplet_kicad_plugin/; noted intermediate-file guard now lives in the vendored chiplet_format_io library; removed em-dashes. |
 | 1.2 | 2026-06-18 | Mauricio Montanares | Relocated to chiplet-spec as the canonical, permissive (Apache-2.0) home, re-synced from the chiplet-studio copy; chiplet-studio now points here. Reframed as a format-level contract whose `chiplet-studio/...`, `kicad/...`, `gds_to_kicad/...` paths denote reference implementations. |
 | 1.3 | 2026-06-19 | Mauricio Montanares | Named the repo-local `chiplet-format-io` libraries (`reference/cpp`, `reference/python`) as the primary reference and made explicit that they are structural-only, with the frame/anchor/z semantics owned by consumers and demonstrated by chiplet-studio (header and section 5). Cross-referenced the in-repo worked example `examples/interposer_demo_design.chiplet`. |
+| 1.4 | 2026-08-31 | Mauricio Montanares | Resolved the position-semantics self-contradiction the first real interposer route exposed. `position:` places the component's anchor reference point (section 2.1): the geometric center only for `bbox_center`, its own GDS (0,0) for `gds_origin`. Corrected TL;DR item 2, section 1.4, and the 2.3 `gds_origin` example comment, which overgeneralized `position` as the geometric center for every component. Prose only; no schema or `format_version` change. |
