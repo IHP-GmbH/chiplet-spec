@@ -28,8 +28,11 @@ def _load(path: Path) -> dict:
 
 PINS_SCHEMA = _load(SCHEMAS / "pins.schema.json")
 PADMAP_SCHEMA = _load(SCHEMAS / "blackbox_padmap.schema.json")
+IO_PADS_SCHEMA = _load(SCHEMAS / "io_pads.schema.json")
 PINS_EXAMPLE = _load(EXAMPLES / "pins.example.json")
 PADMAP_EXAMPLE = _load(EXAMPLES / "blackbox_padmap.example.json")
+IO_PADS_BOARD_ABS_EXAMPLE = _load(EXAMPLES / "io_pads.board_absolute.example.json")
+IO_PADS_CANONICAL_EXAMPLE = _load(EXAMPLES / "io_pads.canonical.example.json")
 
 
 def _validator(schema: dict):
@@ -46,7 +49,7 @@ def _valid(schema: dict, instance) -> bool:
 
 # --- (a) both schemas are well-formed draft-07 -----------------------------
 def test_both_schemas_are_wellformed_draft07():
-    for schema in (PINS_SCHEMA, PADMAP_SCHEMA):
+    for schema in (PINS_SCHEMA, PADMAP_SCHEMA, IO_PADS_SCHEMA):
         cls = validator_for(schema)
         assert cls is jsonschema.Draft7Validator  # the files declare draft-07
         cls.check_schema(schema)  # SchemaError on a malformed schema
@@ -123,3 +126,115 @@ def test_pins_example_fails_the_padmap_schema():
 
 def test_padmap_example_fails_the_pins_schema():
     assert not _valid(PINS_SCHEMA, PADMAP_EXAMPLE)
+
+
+# --- io_pads manifest: positives -------------------------------------------
+def test_io_pads_board_absolute_example_validates():
+    assert _valid(IO_PADS_SCHEMA, IO_PADS_BOARD_ABS_EXAMPLE)
+
+
+def test_io_pads_canonical_example_validates():
+    assert _valid(IO_PADS_SCHEMA, IO_PADS_CANONICAL_EXAMPLE)
+
+
+def test_io_pads_empty_array_validates():
+    # The canonicalizer always writes the file, so an empty io_pads is the loud
+    # "board yielded 0" signal (distinct from an absent file), and must validate.
+    doc = copy.deepcopy(IO_PADS_CANONICAL_EXAMPLE)
+    doc["io_pads"] = []
+    assert _valid(IO_PADS_SCHEMA, doc)
+
+
+# --- io_pads manifest: negatives -------------------------------------------
+def test_io_pads_missing_schema_const_is_rejected():
+    doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
+    doc.pop("schema")
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+def test_io_pads_wrong_schema_const_is_rejected():
+    doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
+    doc["schema"] = "adk-boundary-manifest"
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+def test_io_pads_missing_version_is_rejected():
+    doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
+    doc.pop("version")
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+def test_io_pads_unaccepted_version_is_rejected():
+    doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
+    doc["version"] = "2.0.0"
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+def test_io_pads_missing_frame_is_rejected():
+    doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
+    doc.pop("frame")
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+def test_io_pads_unknown_frame_is_rejected():
+    # Consumers key on frame and hard-refuse; an unlisted frame must never validate.
+    doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
+    doc["frame"] = "hyp_absolute"
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+def test_io_pads_pad_without_ref_is_rejected():
+    doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
+    doc["io_pads"][0].pop("ref")
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+def test_io_pads_empty_ref_is_rejected():
+    doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
+    doc["io_pads"][0]["ref"] = ""
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+def test_io_pads_zero_size_is_rejected():
+    # An unresolvable pad size is an emitter error, never a 0.0 entry.
+    doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
+    doc["io_pads"][0]["size_x_um"] = 0
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+def test_io_pads_pad_without_layer_is_rejected():
+    doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
+    doc["io_pads"][0].pop("layer")
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+def test_io_pads_no_net_pad_is_valid_but_missing_net_is_not():
+    # net "" is legal (a no-net pad); only a MISSING net key is rejected.
+    doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
+    doc["io_pads"][0]["net"] = ""
+    assert _valid(IO_PADS_SCHEMA, doc)
+    doc["io_pads"][0].pop("net")
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+def test_io_pads_object_instead_of_array_is_rejected():
+    doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
+    doc["io_pads"] = {}
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+def test_io_pads_frame_origin_missing_key_is_rejected():
+    doc = copy.deepcopy(IO_PADS_CANONICAL_EXAMPLE)
+    doc["frame_origin_board_um"].pop("y")
+    assert not _valid(IO_PADS_SCHEMA, doc)
+
+
+# --- io_pads never cross-parses with pins or padmap ------------------------
+def test_io_pads_example_fails_pins_and_padmap_schemas():
+    assert not _valid(PINS_SCHEMA, IO_PADS_BOARD_ABS_EXAMPLE)
+    assert not _valid(PADMAP_SCHEMA, IO_PADS_BOARD_ABS_EXAMPLE)
+
+
+def test_pins_and_padmap_examples_fail_the_io_pads_schema():
+    assert not _valid(IO_PADS_SCHEMA, PINS_EXAMPLE)
+    assert not _valid(IO_PADS_SCHEMA, PADMAP_EXAMPLE)
