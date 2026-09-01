@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 IHP GmbH
+"""Executable gate for the two committed geometry schemas (pins + black-box padmap).
+
+This is NOT part of the .chiplet reader-parity corpus (run_conformance.py /
+manifest.yaml). It proves the two JSON Schemas are well-formed, that the canonical
+example instances validate, that every documented negative is rejected, and that the
+two artifacts never cross-parse (a pins.json is not a padmap and vice versa).
+
+jsonschema is a HARD import here on purpose: a gate that silently skips itself when
+its validator is missing is not a gate. The validator class is chosen by
+``validator_for`` off each file's own ``$schema`` (draft-07), never hardcoded.
+"""
+import copy
+import json
+from pathlib import Path
+
+import jsonschema
+from jsonschema.validators import validator_for
+
+SCHEMAS = Path(__file__).resolve().parent.parent / "schemas"
+EXAMPLES = SCHEMAS / "examples"
+
+
+def _load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+PINS_SCHEMA = _load(SCHEMAS / "pins.schema.json")
+PADMAP_SCHEMA = _load(SCHEMAS / "blackbox_padmap.schema.json")
+PINS_EXAMPLE = _load(EXAMPLES / "pins.example.json")
+PADMAP_EXAMPLE = _load(EXAMPLES / "blackbox_padmap.example.json")
+
+
+def _validator(schema: dict):
+    """The draft-appropriate validator for ``schema`` (draft-07 for these files),
+    picked off its ``$schema`` so the 2020-12 dialect is never assumed."""
+    cls = validator_for(schema)
+    cls.check_schema(schema)
+    return cls(schema)
+
+
+def _valid(schema: dict, instance) -> bool:
+    return _validator(schema).is_valid(instance)
+
+
+# --- (a) both schemas are well-formed draft-07 -----------------------------
+def test_both_schemas_are_wellformed_draft07():
+    for schema in (PINS_SCHEMA, PADMAP_SCHEMA):
+        cls = validator_for(schema)
+        assert cls is jsonschema.Draft7Validator  # the files declare draft-07
+        cls.check_schema(schema)  # SchemaError on a malformed schema
+
+
+# --- (b) the canonical example instances validate --------------------------
+def test_pins_example_validates():
+    assert _valid(PINS_SCHEMA, PINS_EXAMPLE)
+
+
+def test_padmap_example_validates():
+    assert _valid(PADMAP_SCHEMA, PADMAP_EXAMPLE)
+
+
+# --- (c) negatives: mutate a valid example, assert it is rejected -----------
+def test_pins_pin_review_artifact_is_rejected():
+    # A name-review artifact (source_type pin_review, no dbu_um, no per-pin
+    # coordinates) must fail the GEOMETRY schema: that separation is the point.
+    doc = copy.deepcopy(PINS_EXAMPLE)
+    doc["source_type"] = "pin_review"
+    doc.pop("dbu_um")
+    for pin in doc["pins"]:
+        pin.pop("center_x_dbu", None)
+        pin.pop("center_y_dbu", None)
+    assert not _valid(PINS_SCHEMA, doc)
+
+
+def test_pins_pin_without_pad_index_is_rejected():
+    doc = copy.deepcopy(PINS_EXAMPLE)
+    doc["pins"][0].pop("pad_index")
+    assert not _valid(PINS_SCHEMA, doc)
+
+
+def test_pins_pin_without_name_is_rejected():
+    doc = copy.deepcopy(PINS_EXAMPLE)
+    doc["pins"][0].pop("name")
+    assert not _valid(PINS_SCHEMA, doc)
+
+
+def test_pins_without_version_is_rejected():
+    doc = copy.deepcopy(PINS_EXAMPLE)
+    doc.pop("version")
+    assert not _valid(PINS_SCHEMA, doc)
+
+
+def test_pins_zero_dbu_is_rejected():
+    doc = copy.deepcopy(PINS_EXAMPLE)
+    doc["dbu_um"] = 0
+    assert not _valid(PINS_SCHEMA, doc)
+
+
+def test_padmap_three_element_bbox_is_rejected():
+    doc = copy.deepcopy(PADMAP_EXAMPLE)
+    doc["die"]["bbox_um"] = doc["die"]["bbox_um"][:3]
+    assert not _valid(PADMAP_SCHEMA, doc)
+
+
+def test_padmap_pad_without_x_um_is_rejected():
+    doc = copy.deepcopy(PADMAP_EXAMPLE)
+    doc["pads"][0].pop("x_um")
+    assert not _valid(PADMAP_SCHEMA, doc)
+
+
+def test_padmap_without_die_is_rejected():
+    doc = copy.deepcopy(PADMAP_EXAMPLE)
+    doc.pop("die")
+    assert not _valid(PADMAP_SCHEMA, doc)
+
+
+# --- (d) the two artifacts never cross-parse -------------------------------
+def test_pins_example_fails_the_padmap_schema():
+    assert not _valid(PADMAP_SCHEMA, PINS_EXAMPLE)
+
+
+def test_padmap_example_fails_the_pins_schema():
+    assert not _valid(PINS_SCHEMA, PADMAP_EXAMPLE)

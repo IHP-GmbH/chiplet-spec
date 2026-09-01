@@ -33,6 +33,30 @@ jobs:
         working-directory: reference/python
         run: pytest -q
 
+  # The .chiplet reader-parity corpus and the executable schema gate. The gate
+  # (conformance/test_schemas.py) validates the committed JSON Schemas and their
+  # example instances; jsonschema is a hard dependency there, so this job installs
+  # it rather than letting the gate degrade to a skip. The corpus reader
+  # (run_conformance.py) imports the reference package off the sibling source dir,
+  # so installing it here also exercises the packaged path.
+  conformance:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: conformance/requirements.txt
+
+      - name: Install the reference package and conformance test deps
+        run: pip install ./reference/python pytest -r conformance/requirements.txt
+
+      - name: Run the conformance corpus and the schema gate
+        working-directory: conformance
+        run: pytest -q
+
   # The C++ reference had enable_testing() and a ctest target that nothing ever
   # invoked, in the upstream of two vendored copies. This is that target running.
   cpp:
@@ -91,15 +115,17 @@ jobs:
           reuse lint
 
   ci-gate:
-    needs: [python, cpp, static]
+    needs: [python, conformance, cpp, static]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: Require every gating job to have succeeded
         run: |
-          echo "python: ${{ needs.python.result }}"
-          echo "cpp:    ${{ needs.cpp.result }}"
-          echo "static: ${{ needs.static.result }}"
+          echo "python:      ${{ needs.python.result }}"
+          echo "conformance: ${{ needs.conformance.result }}"
+          echo "cpp:         ${{ needs.cpp.result }}"
+          echo "static:      ${{ needs.static.result }}"
           test "${{ needs.python.result }}" = "success"
+          test "${{ needs.conformance.result }}" = "success"
           test "${{ needs.cpp.result }}" = "success"
           test "${{ needs.static.result }}" = "success"
