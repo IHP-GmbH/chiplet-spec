@@ -313,3 +313,34 @@ def test_the_padmap_version_is_optional_but_checked_when_present():
     assert _valid(PADMAP_SCHEMA, doc)
     doc["version"] = "1"
     assert not _valid(PADMAP_SCHEMA, doc)
+
+
+# --- the vendored-reader identity ------------------------------------------
+def test_both_version_constants_exist_and_parse():
+    # The two answer different questions (which documents / which reader), so
+    # both must be present and both must be readable by the same rule. A vendored
+    # copy that carries neither leaves a consumer with only byte comparison.
+    assert cfio.check_contract_version(
+        cfio.SUPPORTED_FORMAT_VERSION, cfio.SUPPORTED_FORMAT_VERSION,
+        name="SUPPORTED_FORMAT_VERSION") == "1.0"
+    major_minor = cfio.check_contract_version(
+        cfio.__version__, cfio.__version__, name="chiplet_format_io.__version__")
+    assert major_minor == ".".join(cfio.__version__.split(".")[:2])
+    assert len(cfio.__version__.split(".")) == 3  # readers ship a full MAJOR.MINOR.PATCH
+
+
+def test_the_reader_release_is_exported():
+    assert "__version__" in cfio.__all__
+    assert "SUPPORTED_FORMAT_VERSION" in cfio.__all__
+
+
+def test_the_installed_distribution_agrees_with_the_module():
+    # pyproject.toml reads the version off the module, so an installed package
+    # and a vendored copy of the file can never disagree. Skipped rather than
+    # failed when the suite runs off the source tree with nothing installed.
+    metadata = pytest.importorskip("importlib.metadata")
+    try:
+        installed = metadata.version("chiplet-format-io")
+    except metadata.PackageNotFoundError:
+        pytest.skip("chiplet-format-io is not installed in this environment")
+    assert installed == cfio.__version__

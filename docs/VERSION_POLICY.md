@@ -78,4 +78,8 @@ way to notice it.
 It is not the compatibility contract. A copy that differs by a comment is
 compatible; a copy that is byte-identical to an artifact whose *meaning* changed
 is not. Consumers gate on the declared version through the rule above, never on
-a hash of a vendored file.
+a hash of a vendored file. Where the vendored artifact is the reader itself,
+`chiplet_format_io.__version__` is the value the copy carries for exactly this
+purpose, so a consumer can require a reader release without comparing bytes. It
+is the release of the reader, not of the format: `SUPPORTED_FORMAT_VERSION`
+still says which documents that reader understands.

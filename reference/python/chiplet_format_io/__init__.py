@@ -29,6 +29,14 @@ sidecar (``io_pads.json``, ``pins.json``, the black-box padmap, the boundary
 manifest, ``interconnect_methods.json``)::
 
     cfio.check_contract_version(doc["version"], "1.0", name="io_pads.json")
+
+Two version constants, and they answer different questions.
+:data:`SUPPORTED_FORMAT_VERSION` is the highest ``.chiplet`` ``format_version``
+this reader was written for, i.e. a fact about documents. :data:`__version__` is
+the release of the reader itself, and it is the value a VENDORED copy of this
+file carries into the tool that embedded it. That is what makes byte identity
+unnecessary: a consumer requires a reader release (``cfio.__version__``) and a
+document version, and never has to hash a copied file to find out what it has.
 """
 from __future__ import annotations
 
@@ -39,6 +47,7 @@ import yaml
 
 __all__ = [
     "SUPPORTED_FORMAT_VERSION",
+    "__version__",
     "ChipletFormatError",
     "ContractVersionError",
     "ContractVersionWarning",
@@ -57,6 +66,14 @@ __all__ = [
 #: a same-major higher minor (see :func:`check_format_version`), so this is a
 #: single exported string constant, never re-derived from a bump.
 SUPPORTED_FORMAT_VERSION = "1.0"
+
+#: The release of THIS reader, and the value a vendored copy carries with it.
+#: Distinct from :data:`SUPPORTED_FORMAT_VERSION`, which is about the documents:
+#: one says what is on disk, the other says which reader is in the tree. It is the
+#: distribution version too (``pyproject.toml`` reads it from here), so a consumer
+#: that installed the package and one that vendored the file agree on the number.
+#: Bumped under the same policy as everything else (docs/VERSION_POLICY.md).
+__version__ = "1.1.0"
 
 
 class ChipletFormatError(ValueError):

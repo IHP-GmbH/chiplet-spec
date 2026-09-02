@@ -6,7 +6,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chiplet-format-io"
-version = "0.1.0"
+# Single source of truth: chiplet_format_io.__version__. The package and a
+# vendored copy of the module must never be able to disagree about which reader
+# release they are.
+dynamic = ["version"]
 description = "Permissive (Apache-2.0) reference reader/writer for the .chiplet assembly format"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -17,6 +20,9 @@ dependencies = ["PyYAML>=5.1"]
 
 [tool.setuptools]
 packages = ["chiplet_format_io"]
+
+[tool.setuptools.dynamic]
+version = { attr = "chiplet_format_io.__version__" }
 
 [tool.pytest.ini_options]
 # This suite needs nothing but PyYAML, so it should never skip. -ra is here so
