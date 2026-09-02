@@ -55,6 +55,16 @@ fixtures:
       class-agnostic (no round-trip or writer expectation), so it is checked
       identically for passthrough and typed readers.
 
+  - file: v1_0_all_blocks.chiplet
+    expect: accept
+    version: "1.0"
+    note: >-
+      Schema-coverage document: every canonical top-level block (all eleven root
+      keys except _metadata). It is in the corpus so the structural schema
+      (schemas/chiplet.schema.json, driven by test_chiplet_schema.py) and the
+      reader parity are proved on the SAME file instead of on two that drift.
+      Format-level ACCEPT, class-agnostic (no round-trip or writer expectation).
+
   - file: v1_1_higher_minor.chiplet
     expect: warn
     version: "1.1"

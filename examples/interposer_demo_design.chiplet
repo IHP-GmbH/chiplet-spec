@@ -15,6 +15,12 @@ assembly:
   description: "Two SG13G2 dies on an IntM4TM2 interposer; mixed interconnect methods"
   units: um
 
+# Interposer axis: which interposer PDK rule set this assembly is verified
+# against. A registry id the consuming ADK resolves against its own adapter
+# directory, never a path to a rule deck.
+interposer:
+  adapter: intm4tm2
+
 technologies:
   intm4tm2:
     description: "IHP 130nm IntM4TM2 aluminium BEOL interposer"

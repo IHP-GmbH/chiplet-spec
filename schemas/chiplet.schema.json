@@ -1,0 +1,376 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ihp.example/chiplet-spec/chiplet.schema.json",
+  "title": "Chiplet assembly document (.chiplet)",
+  "description": "Machine-readable schema of the .chiplet root document described in docs/CHIPLET_FORMAT_SPEC.md. NORMATIVE FOR STRUCTURE: which root keys exist, which block each key holds, the type and key set of every block the spec defines by key list, and the closed vocabularies (component anchor, interface type). NOT normative for semantics: the format_version tolerance policy (same-major higher minor accepted with a warning, a different major refused), the _metadata.finalize_required refusal, the absent-anchor default-and-warn, the 1e5 um leak guard and every cross-reference check (a component technology naming a defined technology, unique component ids, a connection naming a known interconnect method) stay with the reference reader (reference/python/chiplet_format_io), which is normative for them. A document may therefore be schema-valid and still be refused by a reader (a same-major-plus-one major, an intermediate file), and the two deliberate cases where the reader is more tolerant than this schema are pinned as fixtures in conformance/: an undeclared ROOT key (the reader passes it through additively; the schema rejects it, which is the point of additionalProperties false here) and an unquoted numeric format_version (the reader coerces through str() for back-compat; the spec says the field MUST be quoted and the schema holds that line). YAML is validated by parsing it to the JSON data model first; this schema constrains that model.",
+  "type": "object",
+  "required": ["format_version", "assembly"],
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "Quoted MAJOR.MINOR string; baseline \"1.0\". Quoting is structural: an unquoted 1.10 is read as \"1.1\" by PyYAML and \"1.10\" by yaml-cpp, so an unquoted value is a schema error here even though the reference reader coerces it through str(). Which majors and minors a given reader accepts is the reader's tolerant policy (spec, Validation Rules 1), not a structural question, so this pattern does not pin the major."
+    },
+    "assembly": {
+      "$ref": "#/definitions/assembly",
+      "description": "Assembly metadata. Required."
+    },
+    "technologies": {
+      "type": "object",
+      "description": "Map of technology id -> technology. Ids are unique by construction (map keys) and are not constrained here: the spec recommends alphanumeric plus underscore but no reader enforces it.",
+      "additionalProperties": {"$ref": "#/definitions/technology"}
+    },
+    "connection_stacks": {
+      "type": "object",
+      "description": "Map of stack id -> named interconnect stack. A die selects one by id through its component `connection` field. The same stacks are published in the interconnect_methods.json sidecar (the single source of truth for the interconnect PDK); inlining them here is for self-containment.",
+      "additionalProperties": {"$ref": "#/definitions/connection_stack"}
+    },
+    "components": {
+      "type": "array",
+      "description": "Placed components. May be empty (a version/metadata-only document is legal).",
+      "items": {"$ref": "#/definitions/component"}
+    },
+    "interconnect": {
+      "$ref": "#/definitions/interconnect",
+      "description": "Optional interconnect-axis adapter and its optional PDK-backed identity."
+    },
+    "interposer": {
+      "$ref": "#/definitions/interposer",
+      "description": "Optional interposer-axis adapter: which interposer PDK rule set the assembly is verified against."
+    },
+    "interfaces": {
+      "type": "array",
+      "description": "Typed die-to-die / bond interfaces.",
+      "items": {"$ref": "#/definitions/interface"}
+    },
+    "netlist": {
+      "$ref": "#/definitions/netlist",
+      "description": "Optional assembly netlist, inline or by reference."
+    },
+    "flow": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "OPAQUE host-specific build/flow configuration. No tool of ours consumes it: the format leaves its content unspecified, readers preserve it verbatim across a load/dump cycle, and only a host that wrote it re-parses it. Deliberately left extensible; never validate a project's build steps here."
+    },
+    "_metadata": {
+      "$ref": "#/definitions/metadata",
+      "description": "Intermediate-file marker. Canonical .chiplet files carry no _metadata block."
+    }
+  },
+  "definitions": {
+    "assembly": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "description": "Assembly metadata. Closed key set: the spec enumerates these eight keys.",
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "description": "Display name. Required and non-empty (the reference reader enforces the same)."},
+        "description": {"type": "string"},
+        "author": {"type": "string"},
+        "created": {"type": "string", "description": "ISO 8601 date; the format is not machine-checked here."},
+        "modified": {"type": "string", "description": "ISO 8601 date; the format is not machine-checked here."},
+        "units": {"type": "string", "description": "Unit of measurement. The format sets no default; tools conventionally use um."},
+        "assembly_gds": {"type": "string", "description": "Verbatim path to a merged/flattened assembly GDS, when one is produced. Never resolved by a reader."},
+        "io_technology": {"type": "string", "description": "Technology id used for assembly-level I/O pads."}
+      }
+    },
+    "technology": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One fabrication process. Closed key set. Paths are verbatim as written: ${VAR} expansion and relative-to-the-.chiplet resolution are the consumer's job.",
+      "properties": {
+        "description": {"type": "string"},
+        "layer_properties": {"type": "string", "description": "Verbatim path to a KLayout .lyp file."},
+        "stackup": {"type": "string", "description": "Verbatim path to a layer-stackup YAML this technology ships. Takes priority over a consumer's own stackup lookup for this technology id."},
+        "dbu": {"type": "number", "exclusiveMinimum": 0, "description": "Database unit in micrometers; typically 0.001. A zero or negative dbu is not a coordinate resolution."}
+      }
+    },
+    "connection_stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The physical layers a die's bump/pillar stack is built from, bottom (interposer side) first. The stack total drives per-die z-mounting.",
+      "properties": {
+        "description": {"type": "string"},
+        "layers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "One stack layer. The spec marks no key required here (a partially specified stack is legal but contributes nothing to z-mounting); the interconnect PDK registry that owns the canonical stacks does require all four.",
+            "properties": {
+              "name": {"type": "string", "description": "Layer name, matched against the interposer stackup for z-mounting."},
+              "material": {"type": "string", "description": "Material, e.g. Cu, SnAg, SAC305."},
+              "height": {"type": "number", "description": "Layer height in um; the stack total drives z-mounting."},
+              "diameter": {"type": "number", "description": "Body diameter in um."}
+            }
+          }
+        }
+      }
+    },
+    "component": {
+      "type": "object",
+      "required": ["id", "type"],
+      "additionalProperties": false,
+      "description": "One placed physical element. Closed key set: the sixteen keys the spec's Common Fields table lists, plus the two proposed interop references (cdxml_ref, 3dblox_ref) which the spec documents as optional and additive; they are declared here so a file that uses the documented interop hook is not a structural error, and they carry no placement meaning.",
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "description": "Unique component identifier. Uniqueness across the array is a consumer check, not a structural one."},
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Component type. The canonical values are die, die_array, interposer and substrate; deliberately NOT an enum, because the reference reader accepts any non-empty string and rejecting an unlisted type here would make the schema stricter than every reader (spec, consumer-level rule 11)."
+        },
+        "technology": {"type": "string", "description": "Reference to a technology id. Whether that id is defined is a consumer check."},
+        "anchor": {
+          "type": "string",
+          "enum": ["gds_origin", "bbox_center"],
+          "description": "How the component's mesh is centered: gds_origin (mesh built around the component's own GDS origin; dies) or bbox_center (mesh centered on the GDS bbox; interposers). A CLOSED vocabulary: an unknown anchor silently changes where geometry lands, so it is a structural error here. New files MUST declare it; an ABSENT anchor is still schema-valid because the reference reader defaults it to bbox_center and warns, and this schema does not encode reader warnings."
+        },
+        "layout": {"type": "string", "description": "Verbatim path to a GDS/OASIS layout file."},
+        "top_cell": {"type": "string", "description": "Top cell name in the layout (single-cell shorthand for cells)."},
+        "cells": {
+          "description": "One or more cell names in the layout. Writers emit top_cell for one cell and cells for several.",
+          "oneOf": [
+            {"type": "string"},
+            {"type": "array", "items": {"type": "string"}}
+          ]
+        },
+        "position": {"$ref": "#/definitions/position3d"},
+        "rotation": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Rotation angles. Only the Z axis is modeled by the format.",
+          "properties": {"z": {"type": "number", "description": "Rotation around Z in degrees."}}
+        },
+        "orientation": {
+          "type": "string",
+          "enum": ["face_up", "flip_chip", "face_down"],
+          "description": "Mounting orientation of a die. A CLOSED vocabulary: the spec fixes three values and tells writers to stay within them. The reference reader does not reject other strings (it keeps orientation as a raw string and lets the consumer decide), so a file with an unlisted value loads but is not schema-valid; that asymmetry is intentional and is why writers are the ones held to the vocabulary."
+        },
+        "connection": {"type": "string", "description": "Interconnect method id this die mounts on (e.g. cupillar_opt1), referencing the interconnect method registry. Drives per-die z-mounting. An empty string means no method (fall back to the interposer mount reference)."},
+        "dimensions": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Physical size of the component body in um. For a die, thickness excludes the interconnect below it; for an interposer, thickness is the substrate body and the mount plane is attachment_surface_z.",
+          "properties": {
+            "width": {"type": "number", "minimum": 0, "description": "X-extent in um."},
+            "height": {"type": "number", "minimum": 0, "description": "Y-extent in um."},
+            "thickness": {"type": "number", "minimum": 0, "description": "Z-extent in um."}
+          }
+        },
+        "attachment_surface_z": {
+          "type": "number",
+          "description": "INTERPOSER ONLY. Z of the die-attachment (BEOL-top) surface in the component-local frame: the plane dies mount on. Decouples the mount reference from dimensions.thickness. When absent, consumers fall back to dimensions.thickness (legacy files). Which component types may carry it is a consumer check; nothing structural distinguishes them."
+        },
+        "io_pads": {
+          "type": "array",
+          "description": "INTERPOSER ONLY. Assembly-level I/O pads (e.g. wire-bond pads), in the same canonical frame as components. Pads do not declare their own anchor. May be empty.",
+          "items": {"$ref": "#/definitions/io_pad"}
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Custom key-value pairs. Deliberately extensible: the format assigns no meaning to any key here and no reader interprets one."
+        },
+        "array": {"$ref": "#/definitions/component_array"},
+        "cdxml_ref": {"$ref": "#/definitions/cdxml_ref"},
+        "3dblox_ref": {"$ref": "#/definitions/threedblox_ref"}
+      }
+    },
+    "position3d": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "3D position of the component's GEOMETRIC CENTER, in the canonical frame (GDS-bbox-corner of the interposer top_cell, y-up, um). An absent axis is 0. The 1e5 um leak guard on x and y is a reader warning, not a structural bound.",
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "z": {"type": "number"}
+      }
+    },
+    "io_pad": {
+      "type": "object",
+      "required": ["id", "position"],
+      "additionalProperties": false,
+      "description": "One assembly-level I/O pad. id and position are required: a pad with no position is not a point in the canonical frame and cannot be placed, which is also why the io_pads.json sidecar requires its coordinates. size is optional (the reference C++ writer emits it for every pad).",
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "description": "Pad reference; the join key with io_pads.json ref."},
+        "io_class": {"type": "string", "description": "FREE-FORM pad class, deliberately not an enum: wire_bond is conventional, not enforced (unlike interfaces[].type)."},
+        "net": {"type": "string", "description": "Net name. May be empty: a no-net pad is legal."},
+        "position": {
+          "type": "object",
+          "required": ["x", "y"],
+          "additionalProperties": false,
+          "description": "Pad geometric center in the canonical frame, um.",
+          "properties": {"x": {"type": "number"}, "y": {"type": "number"}}
+        },
+        "size": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optional 2D extent in um.",
+          "properties": {"x": {"type": "number"}, "y": {"type": "number"}}
+        },
+        "layer": {"type": "string", "description": "PDK layer name the pad sits on (e.g. TopMetal2). Never a KiCad board layer name."}
+      }
+    },
+    "component_array": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Array configuration; die_array only.",
+      "properties": {
+        "pattern": {"type": "string", "description": "Array pattern: grid, linear or custom. Left open (not an enum) because the spec introduces these as conventional values and no reader validates them."},
+        "count": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Element counts. Integer >= 1 per the spec's data-type table: a zero or fractional count is not an array.",
+          "properties": {
+            "x": {"type": "integer", "minimum": 1},
+            "y": {"type": "integer", "minimum": 1}
+          }
+        },
+        "pitch": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Element spacing in um.",
+          "properties": {"x": {"type": "number"}, "y": {"type": "number"}}
+        },
+        "start_position": {"$ref": "#/definitions/position3d"}
+      }
+    },
+    "cdxml_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "PROPOSED, NON-NORMATIVE. Cites the part this die instantiates in a part-description standard (CDXML / JEDEC JEP30) instead of duplicating that part's datasheet data. Optional and additive: readers that do not understand it ignore it, and its presence never changes placement, the coordinate frame or z-mounting. At least one of mpn or uri SHOULD be present so the reference resolves; that is a SHOULD, so it is not required here.",
+      "properties": {
+        "mpn": {"type": "string", "description": "Manufacturer part number."},
+        "opn": {"type": "string", "description": "Ordering part number."},
+        "version": {"type": "string", "description": "Part-document version."},
+        "uri": {"type": "string", "description": "Path or URL to the part document."},
+        "sha256": {"type": "string", "description": "Content hash, for provenance."}
+      }
+    },
+    "threedblox_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "PROPOSED, NON-NORMATIVE. Cites the 3Dblox ChipletDef describing the same die at the P&R abstraction level. Component-level by design: there is deliberately no assembly-level .3dbx reference, because two machine-readable placement sources for one assembly would create a source-of-truth ambiguity. Optional and additive, exactly like cdxml_ref.",
+      "properties": {
+        "chiplet": {"type": "string", "description": "ChipletDef name inside the .3dbv."},
+        "uri": {"type": "string", "description": "Path or URL to the .3dbv file."},
+        "sha256": {"type": "string", "description": "Content hash, for provenance."}
+      }
+    },
+    "interconnect": {
+      "type": "object",
+      "required": ["adapter"],
+      "additionalProperties": false,
+      "description": "The interconnect axis for the assembly. The spec makes adapter required when the block is present (a block without adapter is ignored by readers, so writing one is a writer bug, not a tolerated shape).",
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+          "not": {"pattern": "\\.drc$"},
+          "description": "Interconnect adapter id, e.g. ihp_cupillar. A REGISTRY ID resolved by the consuming ADK, never a filesystem path: same rule and same pattern as interposer.adapter, see that field."
+        },
+        "technology": {
+          "$ref": "#/definitions/technology",
+          "description": "Optional PDK-backed identity for the interconnect, the same shape as a technologies entry. It is registered under the adapter id, so it resolves through the ordinary technology lookup."
+        }
+      }
+    },
+    "interposer": {
+      "type": "object",
+      "required": ["adapter"],
+      "additionalProperties": false,
+      "description": "The interposer axis for the assembly: which interposer PDK rule set the assembly is verified against. Emitted by the KiCad exporter (from the INTERPOSER_ADAPTER project variable), consumed by the ADK assembly-DRC runner and by the Mosaic cockpit.",
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+          "not": {"pattern": "\\.drc$"},
+          "description": "Interposer adapter id, e.g. intm4tm2. A REGISTRY ID resolved by the consuming ADK against its own adapter directory; NEVER a filesystem path. The pattern admits no path separator and no leading dot, and a value ending in .drc is refused: an id that is really a path (or a rule-deck filename) ties a portable assembly document to one machine's layout, and a document that travels must name what it needs, not where that thing lives on the author's disk. A consumer that needs an adapter and does not find this key REFUSES; it never falls back to a built-in default, because a silently defaulted rule set means an assembly is signed off against rules nobody chose."
+        }
+      }
+    },
+    "interface": {
+      "type": "object",
+      "required": ["id", "type"],
+      "additionalProperties": false,
+      "description": "One typed die-to-die / bond interface.",
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "description": "Unique interface id."},
+        "type": {
+          "type": "string",
+          "enum": ["micro_bump", "copper_pillar", "tsv", "wire_bond"],
+          "description": "A CLOSED vocabulary, unlike io_pads[].io_class: the spec says an unknown interface type is rejected (the C++ reference enforces it; the Python reference validator does not, so this schema is the portable statement of the rule)."
+        },
+        "from": {"$ref": "#/definitions/interface_endpoint"},
+        "to": {"$ref": "#/definitions/interface_endpoint"},
+        "physical": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Physical parameters in um.",
+          "properties": {
+            "pitch": {"type": "number"},
+            "diameter": {"type": "number"},
+            "height": {"type": "number"}
+          }
+        }
+      }
+    },
+    "interface_endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One end of an interface.",
+      "properties": {
+        "component": {"type": "string", "description": "Component id."},
+        "surface": {"type": "string", "description": "Which surface of the component, e.g. top."},
+        "port_layer": {"type": "string", "description": "PDK layer the port sits on, e.g. TopMetal2."}
+      }
+    },
+    "netlist": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Assembly netlist: inline nets, an external_netlist path, or both. An otherwise-empty netlist block is not preserved on write.",
+      "properties": {
+        "external_netlist": {"type": "string", "description": "Verbatim path to an external netlist file. May be empty."},
+        "nets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {"type": "string", "minLength": 1, "description": "Net name. Required (the C++ reference enforces it; the Python reference validator does not, so this schema is the portable statement of the rule)."},
+              "class": {"type": "string", "description": "Net class; default signal. Free-form (power, ground, signal, ...)."},
+              "external": {"type": "boolean", "description": "True if the net is exposed at the assembly boundary."},
+              "connections": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "One net endpoint.",
+                  "properties": {
+                    "component": {"type": "string", "description": "Component id."},
+                    "pin": {"type": "string", "description": "Pin/pad name on that component."},
+                    "layer": {"type": "string", "description": "PDK layer the connection lands on."}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Intermediate-file marker written by a writer that cannot yet emit the canonical frame (notably the KiCad GUI export). A reader MUST refuse a file with finalize_required true unless intermediate files are explicitly allowed; that refusal is reader semantics, so such a file is still schema-valid. Canonical .chiplet files carry no _metadata block at all.",
+      "properties": {
+        "frame": {"type": "string", "description": "The frame the positions are actually in, e.g. pcb-bbox-corner. Any value other than the canonical frame is what makes the file intermediate."},
+        "finalize_required": {"type": "boolean", "description": "True while the file still needs the finalizer. Boolean, not a string: a reader that treats the string \"false\" as truthy would refuse a finalized file."},
+        "finalizer": {"type": "string", "description": "The command that converts positions into the canonical frame and strips this block."}
+      }
+    }
+  }
+}

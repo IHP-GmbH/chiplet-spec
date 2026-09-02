@@ -83,7 +83,7 @@ second source of truth for placement (see the interop appendix).
 ## File Structure
 
 A `.chiplet` file always carries `format_version` and an `assembly` block; every
-other top-level block is optional. The reference reader recognizes ten
+other top-level block is optional. The reference reader recognizes eleven
 top-level keys in total (the full list, with required/optional status, is the
 [Root Level Keys](#root-level-keys) table below). The most common skeleton is:
 
@@ -111,6 +111,7 @@ components:              # optional
 | `technologies` | NO | Map | Technology definitions |
 | `connection_stacks` | NO | Map | Named interconnect stacks (see [Connection Stacks](#connection-stacks)) |
 | `components` | NO | Array | List of components |
+| `interposer` | NO | Object | Interposer-axis adapter: which interposer PDK rule set the assembly is verified against (see [Interposer](#interposer)) |
 | `interconnect` | NO | Object | Interconnect-axis adapter and optional technology (see [Interconnect](#interconnect)) |
 | `interfaces` | NO | Array | Typed die-to-die / bond interfaces (see [Interfaces](#interfaces)) |
 | `netlist` | NO | Object | Optional assembly netlist (see [Netlist](#netlist)) |
@@ -120,7 +121,29 @@ components:              # optional
 Key order is not significant: readers are key-driven and accept the sections in
 any order. (The reference writer emits them in the order `format_version`,
 `_metadata`, `assembly`, `technologies`, `interconnect`, `connection_stacks`,
-`components`, `interfaces`, `netlist`, `flow`.)
+`components`, `interfaces`, `netlist`, `flow`; the KiCad exporter emits
+`interposer` right after `assembly`, before `interconnect`.)
+
+### Machine-readable schema
+
+[`schemas/chiplet.schema.json`](../schemas/chiplet.schema.json) is the
+machine-readable form of this document and is **normative for structure**: which
+root keys exist (the table above, with `additionalProperties: false`, so an
+undeclared root key is a schema error), which block each key holds, the key set
+and types of every block this document defines by key list, and the closed
+vocabularies (component `anchor`, component `orientation`, `interfaces[].type`,
+the adapter-id pattern).
+
+The **reference reader stays normative for semantics**: the tolerant
+`format_version` policy, the `_metadata.finalize_required` refusal, the absent
+`anchor` default-and-warn, the `1e5` um leak guard, and every cross-reference
+check. A document can therefore be schema-valid and still be refused by a reader
+(for example a different major, which is a policy question, not a structural
+one), and in two documented cases the reader is deliberately the more tolerant of
+the two: it carries an undeclared root key additively, and it coerces an unquoted
+numeric `format_version` through `str()` for back-compat. Both cases are pinned
+as fixtures in `conformance/`, where a *new* disagreement between the schema and
+the reader fails the gate.
 
 ---
 
@@ -549,6 +572,44 @@ connection_stacks:
 | `layers[].height` | - | Float (um) | Layer height; the stack total drives z-mounting (contract section 3) |
 | `layers[].diameter` | - | Float (um) | Body diameter |
 
+## Interposer
+
+Optional top-level block declaring the **interposer axis** for the assembly:
+which interposer PDK rule set the assembly is verified against. It carries a
+single required key, `adapter`.
+
+```yaml
+interposer:
+  adapter: intm4tm2                # interposer adapter id (required when present)
+```
+
+| Key | Required | Type | Description |
+|-----|----------|------|-------------|
+| `adapter` | **YES** | String | Interposer adapter id, e.g. `intm4tm2` |
+
+`adapter` is a **registry id that the consuming ADK resolves against its own
+adapter registry; it is never a filesystem path**. It must match
+`^[A-Za-z0-9_][A-Za-z0-9_.-]*$` (so it carries no path separator and no leading
+dot) and must not end in `.drc`. An id that is really a path, or a rule-deck
+filename, ties a portable assembly document to one machine's directory layout;
+a document that travels names *what* it needs, not *where* that thing sits on
+the author's disk.
+
+The block is written by the KiCad exporter (from the `INTERPOSER_ADAPTER`
+project text variable, defaulting to `intm4tm2`), and read by the ADK assembly
+DRC runner and by the assembly cockpit.
+
+**A consumer that needs an adapter and does not find this key refuses**; it does
+not fall back to a built-in default. A silently defaulted rule set means an
+assembly is signed off against rules nobody chose, and the failure is invisible
+in the output. Consumers that only *report* the axis (a viewer, a project
+browser) may of course treat it as absent.
+
+`interposer` and [`interconnect`](#interconnect) are two independent axes: the
+first says which interposer rule set applies, the second which interconnect
+(bump/pillar) rule set. Neither implies the other, and an assembly may declare
+one, both, or neither.
+
 ## Interconnect
 
 Optional top-level block declaring the interconnect axis for the assembly. It is
@@ -565,6 +626,10 @@ interconnect:
     layer_properties: ./tech/vendorx.lyp
     dbu: 0.001
 ```
+
+`adapter` follows the same rule as [`interposer.adapter`](#interposer): a
+registry id the consumer resolves, matching `^[A-Za-z0-9_][A-Za-z0-9_.-]*$` and
+not ending in `.drc`, never a filesystem path.
 
 ## Interfaces
 
@@ -684,7 +749,11 @@ position:
 
 The reference libraries (`chiplet-format-io`, Python and C++) enforce a small set
 of structural invariants; file-system and cross-reference checks are left to the
-consuming tool.
+consuming tool. Structural validation of the document shape itself is available
+separately and mechanically, through
+[`schemas/chiplet.schema.json`](../schemas/chiplet.schema.json) (see
+[Machine-readable schema](#machine-readable-schema)); the rules below are the
+ones that need a reader, not a schema.
 
 **Enforced by the reference validator (hard errors):**
 
@@ -858,3 +927,4 @@ components:
 | 1.0 | 2026-07-09 | Positioned `.chiplet` relative to 3Dblox / IEEE P3537 in the scope section (same physical-assembly layer; P&R vs mask abstraction; interop, not rivalry), added a proposed, non-normative `3dblox_ref` extension mirroring `cdxml_ref` (component-level only; no assembly-level `.3dbx` reference by design), and added the non-normative mapping appendix [`3dblox_interop.md`](./3dblox_interop.md). No on-disk format change; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-08-05 | Documented the optional technology `stackup` field: a path to a layer-stackup YAML the technology ships itself, resolved through the same `${VAR}`/relative chain as `layer_properties` and taking priority over a consumer's own stackup lookup for that technology id. The field was already read, written and relied on by Chiplet Studio; it had never been written down here, so the reference C++ reader dropped it on a round-trip while a consumer's vendored copy carried it. Updated the C++ reference (struct/parse/emit); the Python reader already passes it through. Backward compatible and optional; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-07-21 | Added the optional interposer `attachment_surface_z` field: the die-attachment (BEOL-top) mount plane, decoupled from `dimensions.thickness`, which now carries the physical substrate body (extending downward from the attachment surface). Backward compatible: consumers fall back to `dimensions.thickness` as the mount reference when the field is absent, so legacy files seat dies unchanged. Updated the reference readers (C++ struct/parse/emit; the Python reader already passes it through) and the canonical example. No on-disk format change; `format_version` stays `"1.0"`. |
+| 1.0 | 2026-09-01 | Added the optional top-level `interposer` block (a single required `adapter`, the interposer-axis registry id), taking the root key count from ten to eleven. The block was already emitted by the KiCad exporter and read by the ADK DRC runner and the cockpit; it had never been written down here, so it was an undocumented root key travelling between three tools. Fixed the `adapter` value as a registry id, never a filesystem path (pattern, no `.drc` suffix), and stated the consumer rule: refuse when an adapter is needed and absent, never default silently. Added [`schemas/chiplet.schema.json`](../schemas/chiplet.schema.json), normative for structure, with the reference reader still normative for semantics; wired it into the conformance gate over the whole committed corpus, with the schema-vs-reader divergences pinned. Backward compatible and optional; `format_version` stays `"1.0"`. |

@@ -1,0 +1,475 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 IHP GmbH
+"""Executable gate for schemas/chiplet.schema.json, the .chiplet root document schema.
+
+Three things are proved here.
+
+1. The schema is well-formed draft-07 and the whole committed .chiplet corpus
+   (examples/ plus conformance/fixtures/) validates against it, except for the
+   four documents in DIVERGENCES below, which are pinned WITH a reason.
+2. Every closed key set and every closed vocabulary actually rejects: an unknown
+   root key, an interposer.adapter that is a path, an unquoted format_version, an
+   unknown component anchor, and the rest.
+3. Cross-parse: on the corpus, "validates against the schema" and "loads with
+   chiplet_format_io" agree in both directions, except for exactly the pinned
+   divergences. A NEW divergence fails this gate, which is the point: the schema
+   is normative for structure and the reader for semantics, and the places where
+   the two deliberately disagree are a fixed, reviewed list rather than drift.
+
+jsonschema is a HARD import, as in test_schemas.py: a gate that skips itself when
+its validator is missing is not a gate.
+"""
+import copy
+import json
+import sys
+from pathlib import Path
+
+import jsonschema
+import yaml
+from jsonschema.validators import validator_for
+
+ROOT = Path(__file__).resolve().parent.parent
+SCHEMAS = ROOT / "schemas"
+FIXTURES = ROOT / "conformance" / "fixtures"
+EXAMPLES = ROOT / "examples"
+
+sys.path.insert(0, str(ROOT / "reference" / "python"))
+import chiplet_format_io as cfio  # noqa: E402
+
+CHIPLET_SCHEMA = json.loads(
+    (SCHEMAS / "chiplet.schema.json").read_text(encoding="utf-8"))
+
+#: The complete .chiplet corpus committed in this repository.
+CORPUS = sorted(EXAMPLES.glob("*.chiplet")) + sorted(FIXTURES.glob("*.chiplet"))
+
+#: Corpus documents the schema REFUSES, each with the reason. Everything else in
+#: the corpus must validate. Two of these are refused by the reader as well (they
+#: are version negatives); the other two are the deliberate structure-vs-semantics
+#: divergences below.
+SCHEMA_NEGATIVE = {
+    "v1_0_additive_unknown_key.chiplet": "an undeclared root key",
+    "v1_0_unquoted_numeric.chiplet": "format_version written unquoted",
+    "v1_0_malformed_version.chiplet": "format_version is not MAJOR.MINOR",
+    "v1_0_missing_version.chiplet": "no format_version at all",
+}
+
+#: The ONLY documents where the structural schema and the reference reader
+#: disagree, each with the reason it is deliberate. schema/reader are the two
+#: verdicts: True == accepts.
+DIVERGENCES = {
+    "v1_0_additive_unknown_key.chiplet": {
+        "schema": False, "reader": True,
+        "why": "An undeclared ROOT key. The reader is a passthrough and carries "
+               "it additively (round-tripping it is a manifest expectation); the "
+               "schema closes the root so an undeclared root key is a structural "
+               "error, which is what makes the root key table enforceable.",
+    },
+    "v1_0_unquoted_numeric.chiplet": {
+        "schema": False, "reader": True,
+        "why": "format_version written unquoted, so YAML yields a float. The "
+               "reader coerces through str() for back-compat; the spec says the "
+               "field MUST be a quoted string (unquoted 1.10 reads as 1.1 under "
+               "PyYAML and 1.10 under yaml-cpp) and the schema holds that line.",
+    },
+    "v2_0_higher_major.chiplet": {
+        "schema": True, "reader": False,
+        "why": "Structurally a valid document; refused on the tolerant version "
+               "POLICY (different major). Version tolerance is reader semantics, "
+               "not structure, so the schema does not pin the major.",
+    },
+    "v0_9_lower_major.chiplet": {
+        "schema": True, "reader": False,
+        "why": "Same as v2_0_higher_major, on the low side.",
+    },
+}
+
+
+def _validator(schema: dict):
+    cls = validator_for(schema)
+    cls.check_schema(schema)
+    return cls(schema)
+
+
+def _valid(instance) -> bool:
+    return _validator(CHIPLET_SCHEMA).is_valid(instance)
+
+
+def _errors(instance):
+    return sorted(_validator(CHIPLET_SCHEMA).iter_errors(instance),
+                  key=lambda e: list(e.path))
+
+
+def _doc(name: str) -> dict:
+    """Parse one corpus document by file name."""
+    for path in CORPUS:
+        if path.name == name:
+            return yaml.safe_load(path.read_text(encoding="utf-8"))
+    raise AssertionError(f"no corpus document named {name!r}")
+
+
+#: The all-blocks coverage fixture: the base every negative below mutates, so a
+#: negative always starts from something that really validates.
+ALL_BLOCKS = _doc("v1_0_all_blocks.chiplet")
+
+
+def _reader_accepts(data) -> bool:
+    """Whether the reference reader loads this document (intermediate allowed).
+
+    allow_intermediate=True so the _metadata guard, which is a workflow rule and
+    not a structural one, never shows up as a cross-parse divergence.
+    """
+    try:
+        cfio.validate(copy.deepcopy(data), allow_intermediate=True)
+    except cfio.ChipletFormatError:
+        return False
+    return True
+
+
+# --- (a) the schema itself -------------------------------------------------
+def test_chiplet_schema_is_wellformed_draft07():
+    cls = validator_for(CHIPLET_SCHEMA)
+    assert cls is jsonschema.Draft7Validator  # the file declares draft-07
+    cls.check_schema(CHIPLET_SCHEMA)
+
+
+def test_root_is_closed_and_declares_the_eleven_spec_keys():
+    # The root key table in docs/CHIPLET_FORMAT_SPEC.md is the contract; this is
+    # that table, executable. A key added to one and not the other fails here.
+    assert CHIPLET_SCHEMA["additionalProperties"] is False
+    assert set(CHIPLET_SCHEMA["properties"]) == {
+        "format_version", "assembly", "technologies", "connection_stacks",
+        "components", "interconnect", "interposer", "interfaces", "netlist",
+        "flow", "_metadata",
+    }
+    assert set(CHIPLET_SCHEMA["required"]) == {"format_version", "assembly"}
+
+
+def test_flow_stays_opaque_and_extensible():
+    # The spec calls flow opaque host build configuration; closing it would make
+    # the format an authority on build steps it deliberately does not model.
+    assert CHIPLET_SCHEMA["properties"]["flow"]["additionalProperties"] is True
+
+
+def test_component_metadata_stays_extensible():
+    comp = CHIPLET_SCHEMA["definitions"]["component"]
+    assert comp["properties"]["metadata"]["additionalProperties"] is True
+
+
+# --- (b) the whole committed corpus ----------------------------------------
+def test_every_committed_chiplet_validates_except_pinned_divergences():
+    assert CORPUS, "no .chiplet corpus found"
+    unexpected = []
+    for path in CORPUS:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        expected = path.name not in SCHEMA_NEGATIVE
+        ok = _valid(data)
+        if ok != expected:
+            detail = "; ".join(f"{list(e.path)}: {e.message}"
+                               for e in _errors(data)[:3])
+            unexpected.append(f"{path.name}: schema={ok}, expected={expected} "
+                              f"({detail})")
+    assert not unexpected, "\n".join(unexpected)
+
+
+def test_all_blocks_fixture_exercises_every_root_key():
+    # A coverage fixture that stops covering is worse than none: it reports green
+    # over blocks nothing validates any more.
+    present = set(ALL_BLOCKS) | {"_metadata"}
+    assert present == set(CHIPLET_SCHEMA["properties"])
+
+
+def test_intermediate_metadata_block_validates():
+    # The KiCad GUI export shape: canonical files carry no _metadata, so no
+    # corpus document has one; the block still has to validate where it appears.
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["_metadata"] = {"frame": "pcb-bbox-corner", "finalize_required": True,
+                        "finalizer": "hyp_to_gds.py --update-chiplet-file"}
+    assert _valid(doc)
+    doc["_metadata"]["unknown"] = 1
+    assert not _valid(doc)
+
+
+def test_finalize_required_must_be_boolean():
+    # A reader that took the string "false" as truthy would refuse a finalized
+    # file; the schema keeps the string out of the format.
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["_metadata"] = {"finalize_required": "true"}
+    assert not _valid(doc)
+
+
+# --- (c) negatives: the root ----------------------------------------------
+def test_unknown_root_key_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["future_block"] = {"knob": 7}
+    assert not _valid(doc)
+
+
+def test_missing_format_version_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc.pop("format_version")
+    assert not _valid(doc)
+
+
+def test_unquoted_format_version_is_rejected():
+    # YAML `format_version: 1.0` parses to a float. PyYAML renders unquoted 1.10
+    # as "1.1" and yaml-cpp as "1.10", so the unquoted spelling is not one value.
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["format_version"] = 1.0
+    assert not _valid(doc)
+    doc["format_version"] = "1.0"
+    assert _valid(doc)
+
+
+def test_malformed_format_version_is_rejected():
+    for bad in ("1", "1.0.0", "v1.0", "1.x", ""):
+        doc = copy.deepcopy(ALL_BLOCKS)
+        doc["format_version"] = bad
+        assert not _valid(doc), bad
+
+
+def test_assembly_without_name_is_rejected():
+    for mutate in (lambda a: a.pop("name"), lambda a: a.update(name="")):
+        doc = copy.deepcopy(ALL_BLOCKS)
+        mutate(doc["assembly"])
+        assert not _valid(doc)
+
+
+def test_unknown_assembly_key_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["assembly"]["units_um"] = 1
+    assert not _valid(doc)
+
+
+# --- (d) negatives: the interposer block ----------------------------------
+def test_interposer_requires_an_adapter():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["interposer"] = {}
+    assert not _valid(doc)
+    doc["interposer"] = {"description": "intm4tm2"}
+    assert not _valid(doc)
+
+
+def test_interposer_adapter_that_is_a_path_is_rejected():
+    # The whole point of the field: a registry id the ADK resolves, never a
+    # filesystem path. A path ties a portable assembly to one machine's layout.
+    for bad in ("./adapters/intm4tm2.drc", "/opt/adk/intm4tm2.drc",
+                "pdk_adapters/interposer/intm4tm2", "../intm4tm2",
+                "adapters\\intm4tm2", "intm4tm2.drc", ".intm4tm2",
+                "-intm4tm2", "intm4tm2 ", "", "intm4tm2/"):
+        doc = copy.deepcopy(ALL_BLOCKS)
+        doc["interposer"]["adapter"] = bad
+        assert not _valid(doc), bad
+
+
+def test_interposer_adapter_registry_ids_are_accepted():
+    for good in ("intm4tm2", "intm4tm2_v2", "intm4tm2.rev-b", "IHP_intm4tm2",
+                 "gf180mcu", "a"):
+        doc = copy.deepcopy(ALL_BLOCKS)
+        doc["interposer"]["adapter"] = good
+        assert _valid(doc), good
+
+
+def test_interposer_adapter_must_be_a_string():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["interposer"]["adapter"] = ["intm4tm2"]
+    assert not _valid(doc)
+
+
+def test_unknown_interposer_key_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["interposer"]["drc"] = "./intm4tm2.drc"
+    assert not _valid(doc)
+
+
+def test_interconnect_adapter_follows_the_same_rule():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["interconnect"]["adapter"] = "./adapters/ihp_cupillar.drc"
+    assert not _valid(doc)
+    doc["interconnect"].pop("adapter")
+    assert not _valid(doc)
+
+
+# --- (e) negatives: components --------------------------------------------
+def test_component_with_unknown_anchor_is_rejected():
+    # An unknown anchor silently changes where geometry lands, so it is a
+    # structural error even though an ABSENT anchor is legal (reader defaults it
+    # to bbox_center and warns).
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["components"][0]["anchor"] = "gds_bbox"
+    assert not _valid(doc)
+    doc["components"][0]["anchor"] = "GDS_ORIGIN"
+    assert not _valid(doc)
+    doc["components"][0].pop("anchor")
+    assert _valid(doc)
+
+
+def test_component_without_id_or_type_is_rejected():
+    for key in ("id", "type"):
+        doc = copy.deepcopy(ALL_BLOCKS)
+        doc["components"][0].pop(key)
+        assert not _valid(doc), key
+        doc = copy.deepcopy(ALL_BLOCKS)
+        doc["components"][0][key] = ""
+        assert not _valid(doc), key
+
+
+def test_component_type_outside_the_canonical_four_is_accepted():
+    # Deliberately open: every reference reader accepts any non-empty type, so a
+    # schema that rejected one would be stricter than the format.
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["components"][0]["type"] = "spacer"
+    assert _valid(doc)
+
+
+def test_component_with_unknown_key_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["components"][0]["z_offset"] = 3.0
+    assert not _valid(doc)
+
+
+def test_unknown_orientation_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["components"][1]["orientation"] = "upside_down"
+    assert not _valid(doc)
+
+
+def test_position_is_closed_and_numeric():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["components"][0]["position"]["w"] = 1.0
+    assert not _valid(doc)
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["components"][0]["position"]["x"] = "3246.156"
+    assert not _valid(doc)
+
+
+def test_negative_dimension_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["components"][0]["dimensions"]["thickness"] = -1.0
+    assert not _valid(doc)
+
+
+def test_array_count_below_one_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["components"][2]["array"]["count"]["x"] = 0
+    assert not _valid(doc)
+    doc["components"][2]["array"]["count"]["x"] = 1.5
+    assert not _valid(doc)
+
+
+def test_io_pad_needs_an_id_and_a_position():
+    for key in ("id", "position"):
+        doc = copy.deepcopy(ALL_BLOCKS)
+        doc["components"][0]["io_pads"][0].pop(key)
+        assert not _valid(doc), key
+
+
+def test_io_pad_position_needs_both_axes_and_no_z():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["components"][0]["io_pads"][0]["position"].pop("y")
+    assert not _valid(doc)
+    doc = copy.deepcopy(ALL_BLOCKS)
+    # Pads are 2D points in the canonical frame; a z here would be a second,
+    # unread mounting story.
+    doc["components"][0]["io_pads"][0]["position"]["z"] = 0.0
+    assert not _valid(doc)
+
+
+def test_io_class_stays_free_form():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["components"][0]["io_pads"][0]["io_class"] = "probe_pad"
+    assert _valid(doc)
+
+
+def test_technology_dbu_must_be_positive():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["technologies"]["sg13g2"]["dbu"] = 0
+    assert not _valid(doc)
+
+
+def test_unknown_technology_key_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["technologies"]["sg13g2"]["lyp"] = "./tech/sg13g2.lyp"
+    assert not _valid(doc)
+
+
+def test_unknown_connection_stack_layer_key_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["connection_stacks"]["cupillar_opt1"]["layers"][0]["radius"] = 22.0
+    assert not _valid(doc)
+
+
+# --- (f) negatives: interfaces and netlist --------------------------------
+def test_unknown_interface_type_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["interfaces"][0]["type"] = "hybrid_bond"
+    assert not _valid(doc)
+
+
+def test_interface_without_id_or_type_is_rejected():
+    for key in ("id", "type"):
+        doc = copy.deepcopy(ALL_BLOCKS)
+        doc["interfaces"][0].pop(key)
+        assert not _valid(doc), key
+
+
+def test_net_without_name_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["netlist"]["nets"][0].pop("name")
+    assert not _valid(doc)
+
+
+def test_unknown_netlist_key_is_rejected():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["netlist"]["source"] = "./design.net"
+    assert not _valid(doc)
+
+
+def test_flow_content_is_never_validated():
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["flow"] = {"anything": {"a host wrote": [1, 2, 3]}}
+    assert _valid(doc)
+
+
+# --- (g) cross-parse: schema vs the reference reader ----------------------
+def test_schema_and_reader_agree_on_the_corpus_except_pinned_divergences():
+    mismatches = []
+    for path in CORPUS:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        schema_ok, reader_ok = _valid(data), _reader_accepts(data)
+        pinned = DIVERGENCES.get(path.name)
+        if pinned is None:
+            if schema_ok != reader_ok:
+                mismatches.append(
+                    f"{path.name}: schema={schema_ok}, reader={reader_ok}; "
+                    f"a NEW structure/semantics divergence. Either fix it or add "
+                    f"it to DIVERGENCES with a reason.")
+            continue
+        if (schema_ok, reader_ok) != (pinned["schema"], pinned["reader"]):
+            mismatches.append(
+                f"{path.name}: schema={schema_ok}, reader={reader_ok}, pinned "
+                f"{pinned['schema']}/{pinned['reader']}: {pinned['why']}")
+    assert not mismatches, "\n".join(mismatches)
+
+
+def test_every_pinned_entry_names_a_real_corpus_file():
+    names = {p.name for p in CORPUS}
+    assert set(DIVERGENCES) <= names, set(DIVERGENCES) - names
+    assert set(SCHEMA_NEGATIVE) <= names, set(SCHEMA_NEGATIVE) - names
+    # A divergence where the schema refuses must be listed as a schema negative,
+    # so the two tables cannot tell different stories about one file.
+    for name, pinned in DIVERGENCES.items():
+        assert (not pinned["schema"]) == (name in SCHEMA_NEGATIVE), name
+
+
+def test_schema_valid_documents_load_with_the_reference_reader():
+    # The forward direction on its own, stated plainly: a schema-valid, same-major
+    # document is loadable. (The two pinned reader-refusals are version-policy
+    # cases, filtered here by the same policy the reader applies.)
+    for path in CORPUS:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not _valid(data):
+            continue
+        if not str(data["format_version"]).startswith(
+                cfio.SUPPORTED_FORMAT_VERSION.split(".")[0] + "."):
+            continue
+        assert _reader_accepts(data), path.name
