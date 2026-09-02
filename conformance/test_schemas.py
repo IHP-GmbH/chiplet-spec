@@ -164,9 +164,12 @@ def test_io_pads_missing_version_is_rejected():
     assert not _valid(IO_PADS_SCHEMA, doc)
 
 
-def test_io_pads_unaccepted_version_is_rejected():
+def test_io_pads_malformed_version_is_rejected():
+    # The schema gates the SHAPE of the version (quoted MAJOR.MINOR(.PATCH)), not
+    # which versions a consumer accepts: that is the shared policy applied by
+    # chiplet_format_io.check_contract_version, gated in test_version_policy.py.
     doc = copy.deepcopy(IO_PADS_BOARD_ABS_EXAMPLE)
-    doc["version"] = "2.0.0"
+    doc["version"] = "1"
     assert not _valid(IO_PADS_SCHEMA, doc)
 
 

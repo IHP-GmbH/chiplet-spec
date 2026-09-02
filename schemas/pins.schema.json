@@ -8,9 +8,11 @@
   "additionalProperties": true,
   "properties": {
     "version": {
-      "type": "integer",
-      "enum": [1],
-      "description": "Contract version. Consumers gate on this; extend the enum when a new version ships."
+      "description": "Contract version. Structural only: WHICH versions a consumer accepts is the shared version policy of docs/VERSION_POLICY.md (same major, minor at or below supported accepted; same-major higher minor accepted with a warning; different major refused; PATCH ignored), applied by chiplet_format_io.check_contract_version. Supported: 1.0. The bare integer 1 is the LEGACY spelling of \"1.0\", still emitted by existing pin-list producers; it is deprecated and will be removed one minor after every producer writes the string form, per the deprecation rule in the policy. New emitters write the string.",
+      "oneOf": [
+        {"type": "string", "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$"},
+        {"type": "integer", "enum": [1]}
+      ]
     },
     "source_type": {
       "type": "string",

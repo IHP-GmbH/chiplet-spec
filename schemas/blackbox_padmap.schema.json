@@ -8,6 +8,11 @@
   "additionalProperties": true,
   "properties": {
     "chiplet_name": {"type": "string"},
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$",
+      "description": "Contract version, quoted MAJOR.MINOR or MAJOR.MINOR.PATCH. OPTIONAL: this artifact shipped unversioned and the existing files carry no version, so requiring one would invalidate every padmap already on disk. When present it is read under the shared version policy of docs/VERSION_POLICY.md (same major, minor at or below supported accepted; same-major higher minor accepted with a warning; different major refused; PATCH ignored), applied by chiplet_format_io.check_contract_version. Supported: 1.0; an absent version means 1.0. New emitters SHOULD write it, so the day this artifact changes shape there is something to gate on."
+    },
     "_provenance": {
       "type": "object",
       "additionalProperties": true,
