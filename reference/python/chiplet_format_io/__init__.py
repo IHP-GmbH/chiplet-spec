@@ -122,13 +122,20 @@ def _parse_version(fv: Any) -> Optional[Tuple[int, int]]:
         fv = str(fv)
     if not isinstance(fv, str):
         return None
-    parts = fv.strip().split(".")
+    parts = fv.split(".")
     if len(parts) != 2:
         return None
-    try:
-        major, minor = int(parts[0]), int(parts[1])
-    except ValueError:
+    # ASCII digits only, checked before int(). int() is far more permissive than
+    # the spec: it accepts a sign, underscore separators, surrounding whitespace
+    # and non-ASCII digits, so "+1.0", "1.0_0", "1. 0", " 1.0 " and "1.\u0660"
+    # all parsed as (1, 0) here. The C++ reference never did (parse_version_parts
+    # requires all_digits), so those five were a READER PARITY divergence, not a
+    # tolerance anyone chose: the same document loaded in Python and threw in
+    # C++. Digits-first makes this reader agree with the C++ one and with the
+    # schema pattern, which were already in agreement.
+    if not all(part.isascii() and part.isdigit() for part in parts):
         return None
+    major, minor = int(parts[0]), int(parts[1])
     if major < 0 or minor < 0:
         return None
     return (major, minor)

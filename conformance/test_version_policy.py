@@ -402,3 +402,35 @@ def test_the_cpp_release_obeys_the_shared_version_policy():
     assert cfio.check_contract_version(
         release, cfio.__version__, name="C++ READER_RELEASE") == ".".join(
             release.split(".")[:2])
+
+# --- reader parity: Python must not be laxer than C++ ----------------------
+# The two reference readers are the same contract in two languages, so a string
+# one accepts and the other throws on is a defect no matter which is "nicer".
+# The C++ parse_version_parts has always required ASCII digits on both sides of
+# the single dot; the Python one used int(), which accepts a sign, underscore
+# separators, surrounding whitespace and non-ASCII digits. Those five strings
+# loaded in Python and threw in C++, and no fixture used one, so the corpus
+# never saw it. Pinned here in the direction of the stricter reader, which is
+# also the direction of the schema pattern.
+CPP_REJECTS_THESE = ("+1.0", "1.0_0", "1. 0", " 1.0 ", "1.\u0660", "1.0\n")
+
+
+@pytest.mark.parametrize("fv", CPP_REJECTS_THESE)
+def test_python_rejects_every_spelling_the_cpp_reader_rejects(fv):
+    assert cfio._parse_version(fv) is None, fv
+
+
+@pytest.mark.parametrize("fv", ["1.0", "1.10", "0.9", "10.0"])
+def test_the_spellings_the_spec_actually_defines_still_parse(fv):
+    # The tightening must not cost a single legal document: MAJOR.MINOR, ASCII
+    # digits, no padding. Multi-digit on both sides, because "1.10" is the
+    # case the unquoted-YAML divergence has always turned on.
+    assert cfio._parse_version(fv) is not None, fv
+
+
+def test_the_unquoted_number_coercion_survives_the_tightening():
+    # The one tolerance the docstring justifies is an unquoted 1.0 in YAML
+    # arriving as a float. That is a YAML spelling, not an int() quirk, and it
+    # stays: removing it would break real documents, unlike the five above.
+    assert cfio._parse_version(1.0) == (1, 0)
+    assert cfio._parse_version(2) is None  # still not MAJOR.MINOR
