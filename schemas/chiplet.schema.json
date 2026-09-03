@@ -9,7 +9,7 @@
   "properties": {
     "format_version": {
       "type": "string",
-      "pattern": "^[0-9]+\\.[0-9]+$",
+      "pattern": "^[0-9]+\\.[0-9]+(?![\\s\\S])",
       "description": "Quoted MAJOR.MINOR string; baseline \"1.0\". Quoting is structural: an unquoted 1.10 is read as \"1.1\" by PyYAML and \"1.10\" by yaml-cpp, so an unquoted value is a schema error here even though the reference reader coerces it through str(). Which majors and minors a given reader accepts is the reader's tolerant policy (spec, Validation Rules 1), not a structural question, so this pattern does not pin the major."
     },
     "assembly": {

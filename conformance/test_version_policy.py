@@ -48,7 +48,7 @@ EXAMPLES = SCHEMAS / "examples"
 #: out here rather than read from one of the schemas: this file is the place that
 #: says what the pattern must be, so a schema that drifts fails instead of
 #: redefining the expectation.
-VERSION_PATTERN = r"^[0-9]+\.[0-9]+(\.[0-9]+)?$"
+VERSION_PATTERN = r"^[0-9]+\.[0-9]+(\.[0-9]+)?(?![\s\S])"
 
 #: schema file -> the key that carries the contract version in it. The key is
 #: spelled ``schema_version`` in the interconnect registry for historical reasons;
@@ -105,7 +105,6 @@ def _no_leaked_warn_state():
     ("1.0.0", "1.0"),      # existing emitters write this; PATCH is ignored
     ("1.0.7", "1.0"),      # any patch, same verdict
     ("1.1", "1.1"),        # at supported
-    ("1.0.0 ", "1.0"),     # surrounding whitespace is not a version change
 ])
 def test_same_major_at_or_below_supported_is_accepted(declared, expected):
     with warnings.catch_warnings():
@@ -177,6 +176,10 @@ def test_a_different_major_is_refused(declared):
     ["1", "0"],
     {"major": 1},
     True,
+    " 1.0",          # surrounding whitespace is malformed, not a version (SPEC-2)
+    "1.0 ",
+    "1.0\n",
+    "1.0.0 ",
 ])
 def test_a_malformed_version_is_refused(declared):
     with pytest.raises(cfio.ContractVersionError):
@@ -240,7 +243,10 @@ def test_a_wellformed_version_string_is_structurally_valid(schema_file, declared
 
 @pytest.mark.parametrize("schema_file", sorted(VERSIONED_SIDECARS))
 @pytest.mark.parametrize("declared", ["1", "1.", "1.0.0.0", "v1.0", "1.0-rc1",
-                                      "", "one.zero", [1, 0], {"major": 1}])
+                                      "", "one.zero", [1, 0], {"major": 1},
+                                      # a trailing newline is what $ lets through
+                                      # under Python re (SPEC-11)
+                                      "1.0\n", " 1.0", "1.0 "])
 def test_a_malformed_version_is_structurally_rejected(schema_file, declared):
     assert not _valid(_version_subschema(schema_file), declared)
 

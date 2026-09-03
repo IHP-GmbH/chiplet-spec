@@ -208,13 +208,11 @@ def _parse_contract_version(value: Any) -> Optional[Tuple[int, int]]:
     """
     if not isinstance(value, str):
         return None
-    # .strip() is kept ON PURPOSE here, unlike _parse_version: surrounding
-    # whitespace is documented and tested as "not a version change" for the
-    # sidecars. It is the one place this reader is still laxer than the shared
-    # schema pattern, which rejects a padded value; tracked as SPEC-2 rather
-    # than flipped in passing, because it is a decision someone made and wrote
-    # a test for.
-    parts = value.strip().split(".")
+    # No .strip(): the sidecar schemas' version patterns admit no surrounding
+    # whitespace, and a reader must not accept what the schema refuses (the
+    # earlier exemption, "surrounding whitespace is not a version change", made
+    # this parser laxer than both the schema and _parse_version; SPEC-2).
+    parts = value.split(".")
     if len(parts) not in (2, 3):
         return None
     # ASCII digits only, for the same reason _parse_version checks them: int()
