@@ -242,6 +242,22 @@ void test_flow_block_the_grammar_cannot_delimit_is_refused() {
           "a flow-style document without a flow block still loads");
 }
 
+// A document assembled in memory, not read from a file, may still carry the
+// pre-slice spelling: the flow VALUE with no key line. dumps() wraps that
+// through the node tree so the output keeps a `flow:` key. Lossy, which is why
+// the reader no longer produces it, but never silently dropped.
+void test_hand_built_flow_value_without_a_key_line_still_emits() {
+    cfio::ChipletDocument doc;
+    doc.format_version = cfio::SUPPORTED_FORMAT_VERSION;
+    doc.assembly.name = "a";
+    doc.has_flow = true;
+    doc.flow_yaml = "steps:\n  - name: export\n";
+    cfio::ChipletDocument reloaded = cfio::loads(cfio::dumps(doc));
+    check(reloaded.has_flow, "hand-built flow value survives dump/load");
+    check(reloaded.flow_yaml.rfind("flow:", 0) == 0,
+          "and comes back as a proper flow block, key line included");
+}
+
 void test_interconnect_adapter_and_technology() {
     const std::string doc =
         "format_version: \"1.0\"\nassembly:\n  name: a\n"
@@ -474,6 +490,7 @@ int main() {
     test_flow_block_is_re_emitted_byte_for_byte();
     test_quoted_key_at_column_zero_refused();
     test_flow_block_the_grammar_cannot_delimit_is_refused();
+    test_hand_built_flow_value_without_a_key_line_still_emits();
     test_interconnect_adapter_and_technology();
     test_technology_stackup_roundtrip();
     test_higher_minor_warns_and_accepts();
