@@ -375,16 +375,22 @@ their own `anchor`. See the contract, section 6.
 ```yaml
 io_pads:
   - id: J1                 # pad reference
-    io_class: wire_bond    # pad class (free-form string)
+    io_class: wire_bond    # die-side usage class: wire_bond | flipped_bump | tsv_bump
     net: VDD               # net name (free-form)
     position: {x: 100.0, y: 100.0}
     size: {x: 80.0, y: 80.0}   # optional 2D extent
     layer: TopMetal2       # layer the pad sits on
 ```
 
-Unlike `interfaces[].type`, `io_class` is a **free-form** string with no closed
-vocabulary (`wire_bond` is a conventional value, not an enforced one). `size` is
-optional; the reference C++ writer emits it for every pad on output.
+`io_class` is the die-side USAGE class of the pad, how it is attached, and it is
+a **closed** vocabulary: `wire_bond`, `flipped_bump`, `tsv_bump`. It was
+free-form until 2026-09-05, but every governed emitter already refused any other
+value and the C++ reader throws on one, so the schema now says what the readers
+do. It is not the interposer-side pad GEOMETRY class; that axis lives in the PDK
+(`pad_classes`) and is joined to a usage class through the interconnect method,
+never by this field's name. Adding a usage class is a MINOR bump that consumers
+adopt before any producer emits it. `size` is optional; the reference C++ writer
+emits it for every pad on output.
 
 ### cdxml_ref (proposed extension)
 

@@ -396,10 +396,38 @@ def test_io_pad_position_needs_both_axes_and_no_z():
     assert not _valid(doc)
 
 
+# The contract statement. The schemas are checked AGAINST it, and the positive
+# cases run over what the schemas declare, so a typo in an enum member, a
+# member added to one schema and not the other, or a member added without a
+# test all fail here rather than travelling.
 IO_CLASSES = ("wire_bond", "flipped_bump", "tsv_bump")
 
 
-@pytest.mark.parametrize("io_class", IO_CLASSES)
+def _declared_io_classes(schema_file):
+    schema = json.loads((SCHEMAS / schema_file).read_text(encoding="utf-8"))
+    hits = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "io_class" and isinstance(value, dict) and "enum" in value:
+                    hits.append(tuple(value["enum"]))
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(schema)
+    assert len(hits) == 1, (schema_file, hits)
+    return hits[0]
+
+
+def test_both_schemas_declare_the_contract_io_classes():
+    assert _declared_io_classes("chiplet.schema.json") == IO_CLASSES
+    assert _declared_io_classes("io_pads.schema.json") == IO_CLASSES
+
+
+@pytest.mark.parametrize("io_class", _declared_io_classes("chiplet.schema.json"))
 def test_io_class_accepts_every_usage_class_the_emitters_enforce(io_class):
     doc = copy.deepcopy(ALL_BLOCKS)
     doc["components"][0]["io_pads"][0]["io_class"] = io_class
