@@ -166,3 +166,29 @@ copy is gateable the same way and neither reference can move alone: a
 conformance test reads the constant out of the header, the version out of the
 C++ package metadata, and `__version__` out of the module, and fails if the
 three disagree.
+
+## Unversioned corrections since 1.0
+
+Two passes over the history, and this table is the result of the second.
+
+**Pass one, declared bumps.** No governed artifact in `schemas/` or `docs/` has
+declared a MINOR or MAJOR bump since 1.0: every row of the spec's own Version
+History is still `1.0`, and the sidecars still declare `"1.0"`. Nothing to
+reconcile.
+
+**Pass two, shape changes that landed without a version change.** Every one of
+them is judged under one sentence, the one in [What bumps what](#what-bumps-what):
+a MINOR only adds what a consumer can ignore and remain correct, and whatever a
+consumer must honour to stay correct is a MAJOR. A row that cannot be justified
+under it is written down as such rather than argued into shape.
+
+| Change | Commits | Why it shipped without a bump |
+|---|---|---|
+| `io_pads[].io_class` closed to `wire_bond`, `flipped_bump`, `tsv_bump` | `1babd2c`, `57c6029` | No governed emitter wrote anything else, so no producer's legal output was taken away, and a value outside the three had no meaning any consumer could act on. The closure is the schema's alone: both reference readers accept an unknown `io_class` string before and after (measured), and rule 8 skips a pad whose class has no row. The measured cost is real and was outside the governed corpus: the closure orphaned fifteen committed `.chiplet` under `research/aspdac2027`, assembly fixtures carrying `io_class: bump` from two generators, which no gate in this repository sees. Their owner has regenerated them; this repository does not touch that tree. A closure that reaches documents nobody governs is the argument for the corpus growing, not for the closure being free. |
+| Schema regex end anchors: `$` replaced by `(?![\s\S])` | `929e173`, `aab9fd3` | Strictly stricter, and only for a value with a trailing newline: Python's `$` also matches before one, so `"1.0\n"` validated against a schema while every reader refused it. Nothing a consumer must honour changed; a schema stopped disagreeing with the readers. |
+| `layers.schema.json` `gds_layer` / `gds_datatype` cap 255 raised to 65535 | `aab9fd3` | The schema was wrong about the format, not describing a change to it: a GDSII layer field is 16 bits and the intm4tm2 interposer already maps datatypes 300 and 301, so the old cap refused conformant documents. A consumer still carrying the old cap is incomplete (it refuses what it should read), never wrong. |
+| Top-level block grammar: normative section, shared oracle, both readers, write-path refusals | `53666f5` through `8a2e6be` (the SPEC-12 chain) | No document shape changed. The grammar wrote down a property `.chiplet` already had (top-level keys bare at column zero) and the new refusals are for documents two conforming readers would have read DIFFERENTLY, which no consumer could have been correct about in the first place. The C++ struct gained a public member, which is a reader-release matter and is what `READER_RELEASE` exists for, not a format one. |
+| Validation rule 8: a pad's `io_class` must allow its interface's `type` | `ccf252b` | A validator getting stricter is not a format change: the format gained nothing to honour, and a consumer that never adopts rule 8 stays correct on every document that passes it. It does move a verdict for documents that were always physically impossible, so it was measured before it landed: 55 documents across this repository, adk-tools examples, the studio fixtures and the plugin trees, one hit, and that one was this repository's own coverage fixture, corrected in the same commit. |
+| Validation rule 9 stated as an assembly-stage rule | `ec2c66b` | Spec text and one corpus fixture. No document shape, no reference verdict and no schema changed; the rule is written for the hosts that hold the interconnect manifest and is run by none of the readers here. |
+| `solder_bump` added to the `interfaces[].type` enum | `45582c2` | **Adding an enum member IS a MINOR by this policy's own words.** It sits in the schema without a bump only because no producer may emit `type: solder_bump` before the first format MINOR batch (format 1.1); until then the value in a 1.0 document is out of contract, whatever the reference readers accept. This row is a deferral, not an exemption: the bump is owed at 1.1. |
+| A consumer declares a SET of accepted majors (SPEC-21) | this slice | Reader-side, not document-side: nothing on disk changed, and the single-string form keeps its exact verdicts (the shared oracle runs both forms against each other). The reader release does not move either, deliberately: under SPEC-6 a bump now would make a stale vendored mirror look VERSION_OK to a consumer gating on the release. The C++ side gained a public function, which is what a reader-release MINOR is for, and it is owed the next time that number moves for a reason of its own. |

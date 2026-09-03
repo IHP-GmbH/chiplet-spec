@@ -100,8 +100,9 @@ __version__ = "1.1.0"
 #: and the C++ ``kKnownInterfaceTypes`` -- and conformance/test_interface_types.py
 #: reads all four, so a member added to one alone fails there instead of
 #: travelling. ``solder_bump`` is the C4-class reflowed solder ball (the
-#: interconnect manifest's ``sbump_sac305``): readers accept it ahead of the 1.1
-#: stamp, producers emit it from 1.1.
+#: interconnect manifest's ``sbump_sac305``): the reference readers accept it
+#: ahead of the 1.1 stamp, installed consumers may not, and that is why producers
+#: emit it only from 1.1.
 KNOWN_INTERFACE_TYPES = ("micro_bump", "copper_pillar", "tsv", "wire_bond",
                          "solder_bump")
 

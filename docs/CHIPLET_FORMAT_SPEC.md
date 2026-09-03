@@ -384,9 +384,13 @@ io_pads:
 
 `io_class` is the die-side USAGE class of the pad, how it is attached, and it is
 a **closed** vocabulary: `wire_bond`, `flipped_bump`, `tsv_bump`. It was
-free-form until 2026-09-05, but every governed emitter already refused any other
-value and the C++ reader throws on one, so the schema now says what the readers
-do. It is not the interposer-side pad GEOMETRY class; that axis lives in the PDK
+free-form until 2026-09-05, and every governed emitter already wrote nothing
+else, so closing it took no producer's legal output away. The closure is the
+SCHEMA's, and only the schema's: both reference readers accept an unknown
+`io_class` string today (measured, not assumed) and rule 8 skips a pad whose
+class has no row, while a consumer that maps the field onto an enum refuses the
+document. The value of a closed vocabulary is exactly that: outside the three,
+the field has no meaning any consumer in the flow can act on. It is not the interposer-side pad GEOMETRY class; that axis lives in the PDK
 (`pad_classes`) and is joined to a usage class through the interconnect method,
 never by this field's name. Adding a usage class is a MINOR bump that consumers
 adopt before any producer emits it. `size` is optional; the reference C++ writer
@@ -662,8 +666,9 @@ against a known vocabulary and an unknown value is rejected.
 
 **Known `type` values:** `micro_bump`, `copper_pillar`, `tsv`, `wire_bond`,
 `solder_bump` (the C4-class reflowed solder ball, the interconnect manifest's
-`sbump_sac305`). `solder_bump` is accepted by readers ahead of the 1.1 stamp;
-producers emit it from 1.1.
+`sbump_sac305`). The reference readers accept `solder_bump` ahead of the 1.1
+stamp; installed consumers may not, which is why producers emit it only from
+1.1.
 
 ```yaml
 interfaces:

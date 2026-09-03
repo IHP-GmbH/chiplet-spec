@@ -651,3 +651,55 @@ def test_the_policy_document_states_the_transition_window():
         assert step in section, step
     assert "a MINOR only adds what a consumer can ignore and remain correct" \
         in policy
+
+
+# --- the retroactive sweep (SPEC-21, pass two) ------------------------------
+def _sweep_rows():
+    policy = (ROOT / "docs" / "VERSION_POLICY.md").read_text(encoding="utf-8")
+    assert "## Unversioned corrections since 1.0" in policy, \
+        "the sweep table is gone from the policy"
+    section = policy.split("## Unversioned corrections since 1.0", 1)[1]
+    rows = []
+    for line in section.split("\n"):
+        cells = [c.strip() for c in line.split("|")[1:-1]]
+        if len(cells) != 3 or set(cells[0]) <= set("- "):
+            continue
+        if cells[0] == "Change":
+            continue
+        rows.append(cells)
+    return rows
+
+
+def test_every_sweep_row_names_a_change_a_commit_and_a_reason():
+    """The sweep table stays a table of facts, not a list of headings.
+
+    What a green here does NOT cover: whether a justification is CORRECT. It
+    checks that every row carries all three cells, that every seven-hex token in
+    the commits column is a real commit in this repository, and that the two
+    rows with wording ruled elsewhere still carry it. Judging a justification is
+    a review, and a review is not a test.
+    """
+    import subprocess
+    rows = _sweep_rows()
+    assert len(rows) >= 6, f"only {len(rows)} sweep rows"
+    shas = []
+    for change, commits, why in rows:
+        assert change and commits and why, change
+        assert len(why) > 80, f"{change}: the reason is a label, not a reason"
+        shas += re.findall(r"\b[0-9a-f]{7}\b", commits)
+    assert len(shas) >= 8, "the sweep names almost no commits"
+    if not (ROOT / ".git").exists():
+        return  # a source tarball, not a checkout: nothing to resolve against
+    for sha in shas:
+        proc = subprocess.run(["git", "cat-file", "-e", sha + "^{commit}"],
+                              cwd=ROOT, capture_output=True)
+        assert proc.returncode == 0, f"{sha} is not a commit in this repository"
+
+
+def test_the_two_ruled_sweep_rows_keep_their_wording():
+    rows = {change: why for change, _commits, why in _sweep_rows()}
+    solder = next(w for c, w in rows.items() if "solder_bump" in c)
+    assert "MINOR by this policy's own words" in solder
+    assert "1.1" in solder and "out of contract" in solder
+    io_class = next(w for c, w in rows.items() if "io_class" in c)
+    assert "fifteen" in io_class and "research/aspdac2027" in io_class

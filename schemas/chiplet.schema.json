@@ -302,7 +302,7 @@
         "type": {
           "type": "string",
           "enum": ["micro_bump", "copper_pillar", "tsv", "wire_bond", "solder_bump"],
-          "description": "A CLOSED vocabulary, like io_pads[].io_class: an unknown interface type is rejected, by this schema and by both reference validators (spec validation rule 4). solder_bump is the C4-class reflowed solder ball, the interconnect manifest's sbump_sac305; readers accept it ahead of the 1.1 stamp, producers emit it from 1.1. Which io_class a given type may meet is spec validation rule 8, a cross-field rule this schema cannot express."
+          "description": "A CLOSED vocabulary, like io_pads[].io_class: an unknown interface type is rejected, by this schema and by both reference validators (spec validation rule 4). solder_bump is the C4-class reflowed solder ball, the interconnect manifest's sbump_sac305; the reference readers accept it ahead of the 1.1 stamp; installed consumers may not, which is why producers emit it only from 1.1. Which io_class a given type may meet is spec validation rule 8, a cross-field rule this schema cannot express."
         },
         "from": {"$ref": "#/definitions/interface_endpoint"},
         "to": {"$ref": "#/definitions/interface_endpoint"},
