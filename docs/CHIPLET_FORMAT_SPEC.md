@@ -710,6 +710,9 @@ host might act on:
    given host does not understand, and a lossy round-trip defeats that. The
    reference readers deliver the block as raw text for this reason; a host with
    a parsed flow model keeps the original text beside it and writes the text.
+   "The block" is the run of lines the
+   [top-level block grammar](#top-level-block-grammar-normative) below assigns
+   to `flow`, which is where byte for byte gets its meaning.
 
 ```yaml
 flow:
@@ -717,6 +720,97 @@ flow:
     - {name: export, tool: kicad}
     - {name: assemble, tool: hyp_to_gds}
 ```
+
+## Top-level block grammar (normative)
+
+Flow rule 4, the merge tooling that carries a foreign block across a re-export,
+and the block-ownership guard all need one answer from a document: which run of
+lines belongs to which top-level key. That question is answered on the TEXT,
+never on a parsed node tree, because a node tree re-quotes scalars and drops
+comments on the way back out. It is answered here once, so that the merge
+splitter in the KiCad plugin, the Python reference reader and the C++ reference
+reader implement one grammar rather than three.
+
+### Key line
+
+A top-level block starts at a KEY LINE. A line is a key line if and only if its
+content matches, anchored at both ends,
+
+```
+^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:\s.*)?
+```
+
+with capture group 1 as the key. Line CONTENT is the text up to the next LF with
+one optional trailing CR removed, so a CRLF document reads exactly like an LF one;
+the terminator is never part of what is matched.
+
+Two anchoring notes, each of which has already cost this format family a defect:
+
+- End the expression with `\Z` (Python `re`) or `(?![\s\S])` (portable, and the
+  spelling `schemas/chiplet.schema.json` uses for the same reason), or match the
+  whole content (`std::regex_match`, which needs no end anchor). NEVER `$`: in
+  Python `$` also matches before a trailing newline, so a `$`-anchored
+  implementation and an ECMA-262 one read different grammars from the same
+  expression.
+- ECMAScript `.` excludes CR as well as LF, unlike Python's, so a `std::regex`
+  implementation writes `[^\n]` where the expression above writes `.`. On a line,
+  which by definition carries no LF, the two mean the same thing.
+
+What follows from the expression, each of these a case in the oracle: an indented
+`  flow:` is not a key line and stays inside the block it sits in; `flow: value`
+and `flow: # note` are key lines (a value or a trailing comment on the key line
+changes nothing); `flow:value` is NOT, because the expression requires whitespace
+between the colon and anything after it; and `---`, `...`, a `#` comment, an empty
+line, a bare `:` and a key containing a space are not key lines.
+
+### Quoted keys at column zero are refused
+
+`"flow":` and `'flow':` at column zero are valid YAML and are NOT key lines under
+this grammar. A splitter therefore attaches such a block to the PRECEDING one,
+where it is owned by whoever owns that block and is dropped by the next re-export
+that regenerates it. A host that splits a document into top-level blocks MUST
+refuse a document carrying a quoted key at column zero rather than mis-attribute
+it; this ownership guard is also why validation rule 7 forbids fixing scalar
+quoting with a document-wide emitter switch that quotes keys too. Keys stay bare,
+values are quoted.
+
+### Block extent
+
+A block's text runs from its key line up to but EXCLUDING the next key line, or to
+end of file. Three consequences, all of them normative:
+
+- Blank lines and full-line comments between two blocks are not key lines, so they
+  attach to the PRECEDING block. A comment written directly above `flow:` belongs
+  to the block before it, not to `flow`. This is deliberate: it is what the merge
+  tooling already does, and a splitter that guessed otherwise would move bytes
+  between two blocks with different owners.
+- Lines before the first key line (a leading `---`, a file header comment) are a
+  PREAMBLE that belongs to no key. An implementation that exposes the preamble
+  uses the empty string as its key.
+- A repeated top-level key concatenates its runs onto the FIRST occurrence, which
+  keeps its position. Such a document is malformed for an unrelated reason
+  (readers disagree on which value wins: PyYAML takes the last, yaml-cpp the
+  first), but the splitter still never drops or reorders text.
+
+### Raw block text
+
+A raw-block accessor returns the bytes exactly as they stand in the source: the
+key line included, original line endings, no trailing-newline normalisation, no
+re-indentation, nothing stripped. Both reference readers provide one, and that is
+what makes flow rule 4 implementable:
+
+- Python: `chiplet_format_io.top_level_blocks(text)` returns every block in
+  document order, and `top_level_block(text, "flow")` returns one or `None`.
+- C++: `ChipletDocument::flow_yaml` is the source slice of the `flow` block, key
+  line included.
+
+### One oracle
+
+Every implementation is measured against
+[`conformance/fixtures/top_level_blocks_cases.json`](../conformance/fixtures/top_level_blocks_cases.json),
+never against another implementation: accept and reject key lines, documents with
+the exact expected slice per top-level key, and the documents that must be
+refused. Add a case to that file, never to a consumer.
 
 ## Data Types and Constraints
 
@@ -823,8 +917,10 @@ ones that need a reader, not a schema.
    document-wide emitter switch: a switch that also quotes mapping keys (yaml-cpp's
    `Emitter::SetStringFormat(DoubleQuoted)` does) emits `"format_version":` at
    column zero, a spelling that is valid YAML but that the line-level ownership
-   grammar of the merge tooling does not recognise as a key, so a writer that fixed
-   its scalars that way would defeat the block-ownership guard on the next merge.
+   grammar of the merge tooling does not recognise as a key (see [Top-level block
+   grammar](#top-level-block-grammar-normative), which refuses such a document
+   outright), so a writer that fixed its scalars that way would defeat the
+   block-ownership guard on the next merge.
    Keys stay bare; values are quoted. The examples in this specification and in
    `examples/` quote every such field, because writers are copied from examples.
 
