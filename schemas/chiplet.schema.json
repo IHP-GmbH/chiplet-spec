@@ -124,7 +124,7 @@
         "anchor": {
           "type": "string",
           "enum": ["gds_origin", "bbox_center"],
-          "description": "How the component's mesh is centered: gds_origin (mesh built around the component's own GDS origin; dies) or bbox_center (mesh centered on the GDS bbox; interposers). A CLOSED vocabulary: an unknown anchor silently changes where geometry lands, so it is a structural error here. New files MUST declare it; an ABSENT anchor is still schema-valid because the reference reader defaults it to bbox_center and warns, and this schema does not encode reader warnings."
+          "description": "How the component's mesh is centered: gds_origin (mesh built around the component's own GDS origin; dies) or bbox_center (mesh centered on the GDS bbox; interposers). A CLOSED vocabulary: an unknown anchor silently changes where geometry lands, so it is a structural error here. New files MUST declare it; an ABSENT anchor is still schema-valid for compatibility with files that predate the rule. The reference readers (Python and C++) are structural and apply NO default; every consumer that reads a missing anchor defaults it to bbox_center and MUST warn, never assume silently, and the strict conformance profile requires the field."
         },
         "layout": {"type": "string", "description": "Verbatim path to a GDS/OASIS layout file."},
         "top_cell": {"type": "string", "description": "Top cell name in the layout (single-cell shorthand for cells)."},
