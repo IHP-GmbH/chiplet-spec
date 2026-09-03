@@ -39,13 +39,22 @@ if(CHIPLET_FORMAT_IO_BUILD_TESTS)
   enable_testing()
   add_executable(test_chiplet_format_io tests/test_chiplet_format_io.cpp)
   target_link_libraries(test_chiplet_format_io PRIVATE chiplet_format_io)
+  # The repository root, derived from THIS source directory rather than from
+  # CMAKE_SOURCE_DIR, so the paths below still point at chiplet-spec when
+  # reference/cpp is pulled into a superproject with add_subdirectory().
+  get_filename_component(_chiplet_spec_root "${CMAKE_CURRENT_SOURCE_DIR}/../.."
+                         ABSOLUTE)
   target_compile_definitions(test_chiplet_format_io PRIVATE
-    CHIPLET_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../examples"
+    CHIPLET_EXAMPLES_DIR="${_chiplet_spec_root}/examples"
     CHIPLET_HEADER_FILE="${CMAKE_CURRENT_SOURCE_DIR}/include/chiplet_format_io/chiplet_format_io.hpp"
     CHIPLET_SOURCE_FILE="${CMAKE_CURRENT_SOURCE_DIR}/src/chiplet_format_io.cpp"
     # The shared top-level block grammar oracle. The Python reference and the
     # KiCad plugin's merge splitter run this same file; three implementations of
-    # one grammar are compared to it, never to each other.
-    CHIPLET_BLOCK_ORACLE="${CMAKE_CURRENT_SOURCE_DIR}/../../conformance/fixtures/top_level_blocks_cases.json")
+    # one grammar are compared to it, never to each other. This is the DEFAULT
+    # path; the CHIPLET_BLOCK_ORACLE environment variable overrides it at run
+    # time, so a binary built in one checkout can be measured against another
+    # checkout's oracle. A missing oracle fails the run and names the path it
+    # looked for: green over tests that never ran is worse than red.
+    CHIPLET_BLOCK_ORACLE_DEFAULT="${_chiplet_spec_root}/conformance/fixtures/top_level_blocks_cases.json")
   add_test(NAME chiplet_format_io COMMAND test_chiplet_format_io)
 endif()

@@ -11,6 +11,7 @@
 // judge what the reader produced.
 #include <yaml-cpp/yaml.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -60,7 +61,24 @@ std::string read_file(const std::string& path) {
 const std::string kExamplesDir = CHIPLET_EXAMPLES_DIR;
 const std::string kHeaderFile = CHIPLET_HEADER_FILE;
 const std::string kSourceFile = CHIPLET_SOURCE_FILE;
-const std::string kBlockOracle = CHIPLET_BLOCK_ORACLE;
+
+// Where the shared top-level block grammar oracle lives. CMake derives a default
+// from this source tree; the CHIPLET_BLOCK_ORACLE environment variable overrides
+// it at RUN time, which is what lets a binary built in one checkout be measured
+// against another checkout's oracle instead of the absolute path baked into it.
+std::string oracle_path() {
+    const char* env = std::getenv("CHIPLET_BLOCK_ORACLE");
+    if (env != nullptr && *env != '\0') return std::string(env);
+    return std::string(CHIPLET_BLOCK_ORACLE_DEFAULT);
+}
+
+// The oracle, parsed once. Reached only after main() has established that the
+// file is there: an absent oracle must FAIL and name the path, never let the
+// grammar tests report green over cases they never read.
+const YAML::Node& block_oracle() {
+    static const YAML::Node node = YAML::LoadFile(oracle_path());
+    return node;
+}
 
 void test_roundtrip_canonical_example() {
     const std::string path = kExamplesDir + "/interposer_demo_design.chiplet";
@@ -162,7 +180,7 @@ void test_unknown_interface_type_rejected() {
 // three implementations are measured against one oracle and never against each
 // other.
 void test_flow_block_is_the_exact_source_slice() {
-    const YAML::Node oracle = YAML::LoadFile(kBlockOracle);
+    const YAML::Node& oracle = block_oracle();
     int cases = 0;
     for (const auto& c : oracle["splits"]) {
         // A splitter-only document (a repeated top-level key) is not one a
@@ -190,7 +208,7 @@ void test_flow_block_is_the_exact_source_slice() {
 // Rule 4 end to end: a document this writer did not author goes out with the
 // same bytes it came in with. A node dump fails this on the comment alone.
 void test_flow_block_is_re_emitted_byte_for_byte() {
-    const YAML::Node oracle = YAML::LoadFile(kBlockOracle);
+    const YAML::Node& oracle = block_oracle();
     const std::string doc =
         oracle["splits"][0]["doc"].as<std::string>();
     cfio::ChipletDocument parsed = cfio::loads(doc);
@@ -209,7 +227,7 @@ void test_flow_block_is_re_emitted_byte_for_byte() {
 // a splitter would hand the block to the preceding key, whose owner regenerates
 // it away on the next export. This reader splits, so it refuses the document.
 void test_quoted_key_at_column_zero_refused() {
-    const YAML::Node oracle = YAML::LoadFile(kBlockOracle);
+    const YAML::Node& oracle = block_oracle();
     int cases = 0;
     for (const auto& c : oracle["refuse"]) {
         ++cases;
@@ -476,6 +494,21 @@ void test_reader_release_is_declared() {
 
 int main() {
     std::cout << "chiplet_format_io C++ reference tests\n";
+
+    // The grammar tests are driven by the shared oracle. If it is not where we
+    // looked, say so and stop: several tests below would otherwise be skipped by
+    // an exception escaping main, and a run that never opened the oracle must
+    // never look like a run that agreed with it.
+    const std::string oracle = oracle_path();
+    if (!std::filesystem::exists(oracle)) {
+        std::cerr << "  FAIL: top-level block grammar oracle not found at "
+                  << oracle << "\n"
+                  << "        (set CHIPLET_BLOCK_ORACLE to the path of "
+                     "conformance/fixtures/top_level_blocks_cases.json)\n";
+        std::cout << "1 checks, 1 failures\nFAILED\n";
+        return 1;
+    }
+
     test_roundtrip_canonical_example();
     test_all_example_chiplets_parse();
     test_missing_format_version_rejected();
