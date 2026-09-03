@@ -18,7 +18,7 @@ consumer that supports `MAJOR.MINOR`:
 | Declared | Verdict |
 |----------|---------|
 | Same major, minor at or below supported | accept |
-| Same major, higher minor | accept, and warn |
+| Same major, higher minor | accept, and warn (see the channel note below) |
 | Different major (higher or lower) | refuse |
 | Missing or malformed | refuse |
 
@@ -27,6 +27,19 @@ consumer that supports `MAJOR.MINOR`:
 Accepting a higher minor is what makes the format additive: a consumer reads the
 document as the version it supports and ignores what it does not recognize, and
 the warning is there so an unexplained missing field has somewhere to point.
+
+**The warning channel, stated so no host is surprised.** The reference readers deliver the
+same-major-higher-minor event two ways: through Python's `warnings` channel (category
+`ContractVersionWarning`, or its `.chiplet` subclass `FormatVersionWarning`, deduplicated per
+artifact and version) for a human to see, and, when the caller passes `on_warn`, to that hook,
+every event, undeduplicated. The `warnings` channel is a process-global the HOST configures. A
+host that escalates warnings to errors (`python -W error`, `filterwarnings("error")`, a test
+runner set strict) will therefore REFUSE a compatible higher minor, and it does so by its own
+choice, not by this policy. A consumer that needs policy-conformant acceptance under such a
+host filters the category around the call or takes the event through `on_warn`, which never
+escalates. The C++ reader has no global channel and returns the verdict; a C++ host decides.
+This is the same statement as the rest of the policy: what is accepted is decided here, how
+loudly is decided by the host, and the two must not be confused.
 Refusing a *lower* major matters as much as refusing a higher one: an older major
 is a different document shape, and half-parsing it is worse than not reading it.
 
