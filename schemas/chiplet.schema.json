@@ -51,7 +51,7 @@
     "flow": {
       "type": "object",
       "additionalProperties": true,
-      "description": "OPAQUE host-specific build/flow configuration. No tool of ours consumes it: the format leaves its content unspecified, readers preserve it verbatim across a load/dump cycle, and only a host that wrote it re-parses it. Deliberately left extensible; never validate a project's build steps here."
+      "description": "OPAQUE host-specific build/flow configuration. The format leaves its content unspecified and readers preserve it verbatim across a load/dump cycle. A reader MAY parse it; a reader that cannot parse it must not reject the document. The block is not authorization: it names nothing a reader is required to run, and a host that executes what it names is responsible for establishing that the block is one its operator intended, since a re-export copies a foreign block into a freshly generated file and authorship therefore proves nothing. Deliberately left extensible; never validate a project's build steps here. See docs/CHIPLET_FORMAT_SPEC.md, Flow."
     },
     "_metadata": {
       "$ref": "#/definitions/metadata",

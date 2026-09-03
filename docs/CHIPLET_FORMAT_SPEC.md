@@ -686,8 +686,23 @@ preserved on write.
 ## Flow
 
 Optional, **opaque** build/flow block. It is host-specific build configuration
-that the format leaves unspecified; readers preserve it verbatim across a
-load/dump cycle and re-parse it only if they care.
+that the format leaves unspecified, and readers preserve it verbatim across a
+load/dump cycle.
+
+Three rules, because this block is the only place the format carries something a
+host might act on:
+
+1. A reader MAY parse it. A reader that cannot parse it MUST NOT reject the
+   document: the content is unspecified, so failing to understand it is the
+   expected case, and the document is still valid without an executable flow.
+2. The block is not authorization. It names nothing a reader is required to run.
+   A host that executes what it names is responsible for establishing that the
+   block is one it or its operator intended, because a `.chiplet` can arrive
+   from anywhere and the document itself is the least trustworthy thing in the
+   room. Authorship is not a usable test: a re-export copies a foreign block
+   into a freshly generated file, so "our tool wrote this" survives an exchange
+   that "our operator meant this" does not.
+3. Nothing else in the format may be made to depend on it. It stays removable.
 
 ```yaml
 flow:
