@@ -11,6 +11,9 @@ committed.
 
 What this does not cover: patterns in prose, and regular expressions compiled in
 the reference readers themselves (those are pinned by their own case tests).
+The two policing tests are complements, not overlaps: a pattern that regresses
+to ``$`` is caught by the dollar test and SKIPPED by the newline test (it is no
+longer end-anchored in the recognised way). Never trim the dollar test.
 """
 import json
 import re
@@ -44,11 +47,28 @@ def _all_regexes():
     return found
 
 
-def test_the_walk_finds_the_patterns_it_is_supposed_to_police():
-    regexes = _all_regexes()
-    assert len(regexes) >= 10, regexes
-    assert any("patternProperties" in where for where, _ in regexes)
-    assert any(where.endswith("/pattern") for where, _ in regexes)
+def test_the_walk_reaches_pattern_values_and_pattern_property_keys():
+    # Capability, proven against a hand-built document rather than the corpus:
+    # a corpus-based check goes red for a non-defect the day the last
+    # patternProperties leaves the schemas, and the tempting fix deletes it.
+    doc = {
+        "properties": {"a": {"type": "string", "pattern": "^x(?![\\s\\S])"}},
+        "patternProperties": {"^k(?![\\s\\S])": {"type": "number"}},
+        "items": [{"pattern": "^y(?![\\s\\S])"}],
+    }
+    found = dict(_regexes(doc, "doc"))
+    assert found == {
+        "doc/properties/a/pattern": "^x(?![\\s\\S])",
+        "doc/patternProperties": "^k(?![\\s\\S])",
+        "doc/items[0]/pattern": "^y(?![\\s\\S])",
+    }, found
+
+
+def test_the_derived_list_is_not_empty():
+    # Floor guard: a broken glob would leave every parametrized test below with
+    # an empty parameter set, which pytest reports as SKIPPED, and the file
+    # would be green having run nothing. A derived list must prove it derived.
+    assert len(_all_regexes()) >= 10, _all_regexes()
 
 
 @pytest.mark.parametrize("where,regex", _all_regexes())
