@@ -396,10 +396,27 @@ def test_io_pad_position_needs_both_axes_and_no_z():
     assert not _valid(doc)
 
 
-def test_io_class_stays_free_form():
+IO_CLASSES = ("wire_bond", "flipped_bump", "tsv_bump")
+
+
+@pytest.mark.parametrize("io_class", IO_CLASSES)
+def test_io_class_accepts_every_usage_class_the_emitters_enforce(io_class):
     doc = copy.deepcopy(ALL_BLOCKS)
-    doc["components"][0]["io_pads"][0]["io_class"] = "probe_pad"
+    doc["components"][0]["io_pads"][0]["io_class"] = io_class
     assert _valid(doc)
+
+
+@pytest.mark.parametrize("io_class", ["probe_pad", "bump", "WIRE_BOND", "wire_bond\n", ""])
+def test_io_class_is_a_closed_vocabulary(io_class):
+    # Deliberate contract change (2026-09-05): this test used to assert the
+    # OPPOSITE, with "probe_pad" as an arbitrary string proving the field was
+    # free-form. Every governed emitter already refused anything outside the
+    # three (KiCad exporter, plugin writer) and the C++ reader throws on an
+    # unknown value, so a free-form schema validated documents that then
+    # failed at load. The schema now says what the readers do.
+    doc = copy.deepcopy(ALL_BLOCKS)
+    doc["components"][0]["io_pads"][0]["io_class"] = io_class
+    assert not _valid(doc), io_class
 
 
 def test_technology_dbu_must_be_positive():

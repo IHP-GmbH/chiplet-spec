@@ -39,7 +39,7 @@
         "additionalProperties": true,
         "properties": {
           "ref": {"type": "string", "minLength": 1, "description": "Footprint reference; the join key. Unique within the file (consumer-enforced). Maps to .chiplet io_pads[].id."},
-          "io_class": {"type": "string", "minLength": 1, "description": "Open vocabulary, mirroring the .chiplet field; wire_bond is conventional, not enforced."},
+          "io_class": {"type": "string", "enum": ["wire_bond", "flipped_bump", "tsv_bump"], "description": "Closed vocabulary, mirroring the .chiplet field: the die-side USAGE class of the pad (how it is attached), not the interposer-side pad geometry class, which lives in the PDK as pad_classes and is joined through the interconnect method. Closed on 2026-09-05 to the set every governed emitter already enforces (KiCad exporter, plugin writer, studio); adding a value is a MINOR bump adopted by consumers before any producer emits it."},
           "x_um": {"type": "number", "description": "Pad geometric center X in the file's frame, um, rounded to 3 decimals."},
           "y_um": {"type": "number", "description": "Pad geometric center Y in the file's frame, um, rounded to 3 decimals."},
           "size_x_um": {"type": "number", "exclusiveMinimum": 0, "description": "A pad whose size cannot be determined is an emitter ERROR, never a 0.0 entry and never a silent drop."},
