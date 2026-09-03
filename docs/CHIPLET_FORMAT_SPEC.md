@@ -689,7 +689,7 @@ Optional, **opaque** build/flow block. It is host-specific build configuration
 that the format leaves unspecified, and readers preserve it verbatim across a
 load/dump cycle.
 
-Three rules, because this block is the only place the format carries something a
+Four rules, because this block is the only place the format carries something a
 host might act on:
 
 1. A reader MAY parse it. A reader that cannot parse it MUST NOT reject the
@@ -703,6 +703,13 @@ host might act on:
    into a freshly generated file, so "our tool wrote this" survives an exchange
    that "our operator meant this" does not.
 3. Nothing else in the format may be made to depend on it. It stays removable.
+4. A host that re-emits a flow block it did not author MUST re-emit it byte for
+   byte, unless the user edited the flow through that host. In particular a host
+   MUST NOT write back resolved values of `${...}` variables, and MUST NOT drop
+   keys it does not model: the block is opaque precisely so it can carry what a
+   given host does not understand, and a lossy round-trip defeats that. The
+   reference readers deliver the block as raw text for this reason; a host with
+   a parsed flow model keeps the original text beside it and writes the text.
 
 ```yaml
 flow:
