@@ -267,7 +267,7 @@
         "adapter": {
           "type": "string",
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*(?![\\s\\S])",
           "not": {"pattern": "\\.drc$"},
           "description": "Interconnect adapter id, e.g. ihp_cupillar. A REGISTRY ID resolved by the consuming ADK, never a filesystem path: same rule and same pattern as interposer.adapter, see that field."
         },
@@ -286,7 +286,7 @@
         "adapter": {
           "type": "string",
           "minLength": 1,
-          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*(?![\\s\\S])",
           "not": {"pattern": "\\.drc$"},
           "description": "Interposer adapter id, e.g. intm4tm2. A REGISTRY ID resolved by the consuming ADK against its own adapter directory; NEVER a filesystem path. The pattern admits no path separator and no leading dot, and a value ending in .drc is refused: an id that is really a path (or a rule-deck filename) ties a portable assembly document to one machine's layout, and a document that travels must name what it needs, not where that thing lives on the author's disk. A consumer that needs an adapter and does not find this key REFUSES; it never falls back to a built-in default, because a silently defaulted rule set means an assembly is signed off against rules nobody chose."
         }

@@ -255,7 +255,16 @@ def test_interposer_adapter_that_is_a_path_is_rejected():
     for bad in ("./adapters/intm4tm2.drc", "/opt/adk/intm4tm2.drc",
                 "pdk_adapters/interposer/intm4tm2", "../intm4tm2",
                 "adapters\\intm4tm2", "intm4tm2.drc", ".intm4tm2",
-                "-intm4tm2", "intm4tm2 ", "", "intm4tm2/"):
+                "-intm4tm2", "intm4tm2 ", "", "intm4tm2/",
+                # A TRAILING NEWLINE. The list tested a trailing space and not
+                # this, and the gap was real: with a plain ``$`` anchor Python's
+                # re matches immediately before a single trailing newline, so
+                # "intm4tm2\n" validated here. An ECMA-262 validator rejects the
+                # same pattern, so the schema meant two different things
+                # depending on who read it. The pattern now ends in (?![\s\S]),
+                # true end-of-input in both dialects. Found by the kicad-plugin
+                # session on the ADK registry contract, 2026-09-03.
+                "intm4tm2\n", "intm4tm2\n\n", "\nintm4tm2"):
         doc = copy.deepcopy(ALL_BLOCKS)
         doc["interposer"]["adapter"] = bad
         assert not _valid(doc), bad
