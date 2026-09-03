@@ -819,7 +819,13 @@ ones that need a reader, not a schema.
    not a permitted form, and the conformance suite classifies that spelling as a
    schema negative. Emitters that quote only when YAML forces it (yaml-cpp's default,
    PyYAML's default for most scalars) do not satisfy this rule without an explicit
-   quoting style for those fields. The examples in this specification and in
+   quoting style for those fields. That style is applied per VALUE, never as a
+   document-wide emitter switch: a switch that also quotes mapping keys (yaml-cpp's
+   `Emitter::SetStringFormat(DoubleQuoted)` does) emits `"format_version":` at
+   column zero, a spelling that is valid YAML but that the line-level ownership
+   grammar of the merge tooling does not recognise as a key, so a writer that fixed
+   its scalars that way would defeat the block-ownership guard on the next merge.
+   Keys stay bare; values are quoted. The examples in this specification and in
    `examples/` quote every such field, because writers are copied from examples.
 
 **Reader behavior (warnings / fallbacks, not hard errors):**
