@@ -797,6 +797,19 @@ ones that need a reader, not a schema.
 4. Every `interfaces[]` entry has an `id` and a `type`, and the `type` is one of `micro_bump`, `copper_pillar`, `tsv`, `wire_bond` (an unknown type is rejected). *C++ reference only; the Python reference validator does not check the interface-type vocabulary and accepts an unknown type.*
 5. Every `netlist.nets[]` entry has a `name`. *C++ reference only; the Python reference validator does not check this and accepts a nameless net.*
 6. A file whose top-level `_metadata.finalize_required` is `true` is refused unless intermediate files are explicitly allowed (it is not yet in the canonical frame; run the named `finalizer`).
+7. Quoting is document semantics, not an emitter default. A writer MUST quote every
+   scalar the format defines as a string (`format_version`, component and pad `id`s,
+   `assembly.name` and other names, `technologies` keys, `top_cell`, layout and file
+   paths, adapter ids) whenever the bare form would be re-typed by a YAML 1.1 or 1.2
+   parser: `0755` reads as the integer 493 under YAML 1.1, `1.10` as the float 1.1,
+   `1234` as an integer, while yaml-cpp hands the same bytes back as strings, so two
+   conforming readers would name different components from one file. A reader MUST
+   NOT rely on coercion to recover the string; the reference reader's coercion of an
+   unquoted `format_version` is back-compat for files that predate this rule, not a
+   permitted form, and the conformance suite classifies that spelling as a schema
+   negative. Emitters that quote only when YAML forces it (yaml-cpp's default, PyYAML's
+   default for most scalars) do not satisfy this rule without an explicit quoting
+   style for those fields.
 
 **Reader behavior (warnings / fallbacks, not hard errors):**
 
