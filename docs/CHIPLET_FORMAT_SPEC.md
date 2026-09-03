@@ -589,7 +589,7 @@ interposer:
 
 `adapter` is a **registry id that the consuming ADK resolves against its own
 adapter registry; it is never a filesystem path**. It must match
-`^[A-Za-z0-9_][A-Za-z0-9_.-]*$` (so it carries no path separator and no leading
+`^[A-Za-z0-9_][A-Za-z0-9_.-]*(?![\s\S])` (so it carries no path separator and no leading
 dot) and must not end in `.drc`. An id that is really a path, or a rule-deck
 filename, ties a portable assembly document to one machine's directory layout;
 a document that travels names *what* it needs, not *where* that thing sits on
@@ -628,7 +628,7 @@ interconnect:
 ```
 
 `adapter` follows the same rule as [`interposer.adapter`](#interposer): a
-registry id the consumer resolves, matching `^[A-Za-z0-9_][A-Za-z0-9_.-]*$` and
+registry id the consumer resolves, matching `^[A-Za-z0-9_][A-Za-z0-9_.-]*(?![\s\S])` and
 not ending in `.drc`, never a filesystem path.
 
 ## Interfaces
