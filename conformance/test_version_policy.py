@@ -434,3 +434,30 @@ def test_the_unquoted_number_coercion_survives_the_tightening():
     # stays: removing it would break real documents, unlike the five above.
     assert cfio._parse_version(1.0) == (1, 0)
     assert cfio._parse_version(2) is None  # still not MAJOR.MINOR
+
+
+# --- escalation must be consistent, not first-read-only --------------------
+def test_escalating_host_refuses_every_read_not_just_the_first():
+    # With the dedup key recorded BEFORE warnings.warn, a host running
+    # warnings-as-errors saw read 1 raise and reads 2 and 3 succeed silently:
+    # the verdict moved depending on who read the artifact first. Found by the
+    # kicad-plugin session against interconnect_pdk's reader; the reference
+    # reader had the same ordering. Under escalation every read must raise.
+    cfio._reset_version_warnings()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", cfio.ContractVersionWarning)
+        for _ in range(3):
+            with pytest.raises(cfio.ContractVersionWarning):
+                cfio.check_contract_version("1.7", "1.0", name="io_pads.json")
+        for _ in range(3):
+            with pytest.raises(cfio.FormatVersionWarning):
+                cfio.check_format_version("1.7")
+
+
+def test_non_escalating_host_still_warns_exactly_once():
+    cfio._reset_version_warnings()
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        for _ in range(3):
+            cfio.check_contract_version("1.7", "1.0", name="io_pads.json")
+    assert sum(isinstance(w.message, cfio.ContractVersionWarning) for w in seen) == 1

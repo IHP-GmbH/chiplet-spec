@@ -184,8 +184,14 @@ def check_format_version(fv: Any, *,
         if on_warn is not None:
             on_warn(msg)
         if normalized not in _WARNED_VERSIONS:
-            _WARNED_VERSIONS.add(normalized)
+            # Record the key only AFTER the warning has been delivered. With the
+            # add first, a host that escalates warnings to errors saw the first
+            # read raise and every later read succeed silently: the same document
+            # accepted or refused depending on who read it first. Now an
+            # escalating host refuses every time, consistently, and a normal host
+            # still sees the warning once.
             warnings.warn(msg, FormatVersionWarning, stacklevel=2)
+            _WARNED_VERSIONS.add(normalized)
     return normalized
 
 
@@ -273,8 +279,9 @@ def check_contract_version(value: Any, supported: str, *, name: str,
             on_warn(msg)
         key = (name, normalized)
         if key not in _WARNED_VERSIONS:
-            _WARNED_VERSIONS.add(key)
+            # Same ordering rule as check_format_version: deliver, then record.
             warnings.warn(msg, ContractVersionWarning, stacklevel=2)
+            _WARNED_VERSIONS.add(key)
     return normalized
 
 
