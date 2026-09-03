@@ -241,7 +241,7 @@ The `components` section is an array of component definitions. Each component re
 | `layout` | NO | String | `""` | Path to GDS/OASIS layout file |
 | `top_cell` | NO | String | `""` | Top cell name in layout (single-cell form) |
 | `cells` | NO | String or Array | - | One or more cell names in the layout. `top_cell` is the single-cell shorthand; writers emit `top_cell` for one cell and `cells` for several. |
-| `position` | NO | Object | `{x:0, y:0, z:0}` | 3D position of the component's **geometric center**, in the canonical frame (see [Coordinate frame](#coordinate-frame-anchor-and-z-mounting-normative)). |
+| `position` | NO | Object | `{x:0, y:0, z:0}` | 3D position of the component in the canonical frame. WHICH local point of the component it places is decided by `anchor:`, not by this field: the GDS bbox centre for `bbox_center`, the cell's own GDS (0, 0) for `gds_origin` (see [Coordinate frame](#coordinate-frame-anchor-and-z-mounting-normative)). |
 | `rotation` | NO | Object | `{z:0}` | Rotation angles |
 | `orientation` | NO | String | `face_up` | Mounting orientation of a die: `face_up`, `flip_chip`, or `face_down`. Absent is treated as `face_up`. (`die` / `die_array`.) |
 | `connection` | NO | String | `""` | Interconnect method id this die mounts on (e.g. `cupillar_opt1`); references an entry in the interconnect method registry (`interconnect_methods.json`). Drives per-die z-mounting (contract section 3). (`die` / `die_array`.) |
@@ -335,8 +335,13 @@ The geometry fields above (`position`, `anchor`, `connection`, and the nested
 Summary of what the contract fixes:
 
 - **Frame.** All `position:` x/y are expressed in the **GDS-bbox-corner of the
-  interposer top_cell**, y-up cartesian, micrometers. `position:` is the
-  component's **geometric center**, not its corner.
+  interposer top_cell**, y-up cartesian, micrometers. The frame fixes the
+  ORIGIN; it does not fix which point of the component sits at `position:`.
+  That is `anchor:`, immediately below: a `bbox_center` component has its GDS
+  bbox centre placed there, and a `gds_origin` component has its own GDS (0, 0)
+  placed there with no extra centering. Reading `position:` as the geometric
+  centre unconditionally puts every `gds_origin` component half its own extent
+  away from where the contract puts it.
 - **`anchor:`** declares how a component's local mesh is centered:
   `gds_origin` (mesh built around the component's own GDS (0,0); used by dies)
   or `bbox_center` (mesh centered on the component's GDS bbox; used by
