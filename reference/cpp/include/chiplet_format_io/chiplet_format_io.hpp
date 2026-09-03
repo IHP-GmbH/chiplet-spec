@@ -43,6 +43,14 @@ namespace chiplet_format_io {
 // docs/CHIPLET_FORMAT_SPEC.md and the Python reference library.
 inline constexpr const char* SUPPORTED_FORMAT_VERSION = "1.0";
 
+// The release of THIS reference implementation, mirroring the Python library's
+// chiplet_format_io.__version__. Distinct from SUPPORTED_FORMAT_VERSION, which
+// is a fact about documents: a consumer that vendors a copy of this reader pins
+// a reader RELEASE, so a vendored mirror can be gated on a version instead of on
+// bytes. The two reference implementations ship one release number, and
+// conformance/test_version_policy.py fails if they drift apart.
+inline constexpr const char* READER_RELEASE = "1.1.0";
+
 // Apply the tolerant format_version policy (parity-bound to the Python
 // check_format_version): missing/malformed or a different major throws
 // ChipletFormatError; a same-major minor <= supported is accepted silently; a

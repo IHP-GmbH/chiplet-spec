@@ -83,3 +83,9 @@ a hash of a vendored file. Where the vendored artifact is the reader itself,
 purpose, so a consumer can require a reader release without comparing bytes. It
 is the release of the reader, not of the format: `SUPPORTED_FORMAT_VERSION`
 still says which documents that reader understands.
+
+The C++ reference carries the same number in `READER_RELEASE`, so a vendored C++
+copy is gateable the same way and neither reference can move alone: a
+conformance test reads the constant out of the header, the version out of the
+C++ package metadata, and `__version__` out of the module, and fails if the
+three disagree.

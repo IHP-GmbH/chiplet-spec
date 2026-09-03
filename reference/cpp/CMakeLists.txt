@@ -5,7 +5,9 @@
 # dependency is yaml-cpp (MIT). No Qt, no KLayout, no pcbnew.
 
 cmake_minimum_required(VERSION 3.16)
-project(chiplet_format_io LANGUAGES CXX VERSION 1.0.0)
+# VERSION is the reader release, kept equal to READER_RELEASE in the header and
+# to chiplet_format_io.__version__ on the Python side.
+project(chiplet_format_io LANGUAGES CXX VERSION 1.1.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

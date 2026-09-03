@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 IHP GmbH
 """Executable gate for the one version policy (docs/VERSION_POLICY.md).
 
-Two halves, because the policy has two halves.
+Three parts, because the policy has three.
 
 The RULE half is the reference implementation,
 ``chiplet_format_io.check_contract_version``: same major with a minor at or below
@@ -16,9 +16,19 @@ do NOT enumerate accepted versions, so a same-major minor bump does not require
 every consumer to ship a new schema first. A test that a different major still
 validates structurally is therefore a positive, not an oversight; the refusal is
 tested on the checker, above.
+
+The PARITY part is the two reference implementations. A consumer that vendors a
+reader pins a reader RELEASE, not a document version, so the Python and C++
+references must ship one release number between them; a C++ mirror whose release
+constant drifts from ``chiplet_format_io.__version__`` would force every C++
+consumer back to byte comparison, which is the very thing the release constant
+exists to end. The C++ side cannot see Python and Python cannot see the compiled
+constant, so the agreement is checked here, on the text of both files.
+
 """
 import copy
 import json
+import re
 import sys
 import warnings
 from pathlib import Path
@@ -344,3 +354,51 @@ def test_the_installed_distribution_agrees_with_the_module():
     except metadata.PackageNotFoundError:
         pytest.skip("chiplet-format-io is not installed in this environment")
     assert installed == cfio.__version__
+
+
+# --- the reference implementations ship one reader release -------------------
+CPP_HEADER = ROOT / "reference" / "cpp" / "include" / "chiplet_format_io" / "chiplet_format_io.hpp"
+CPP_CMAKE = ROOT / "reference" / "cpp" / "CMakeLists.txt"
+
+
+def _cpp_reader_release() -> str:
+    text = CPP_HEADER.read_text(encoding="utf-8")
+    found = re.search(r'READER_RELEASE\s*=\s*"([^"]+)"', text)
+    assert found, f"no READER_RELEASE constant in {CPP_HEADER}"
+    return found.group(1)
+
+
+def _cmake_project_version() -> str:
+    text = CPP_CMAKE.read_text(encoding="utf-8")
+    found = re.search(r"project\([^)]*\bVERSION\s+([0-9][^\s)]*)", text)
+    assert found, f"no project(... VERSION ...) in {CPP_CMAKE}"
+    return found.group(1)
+
+
+def test_the_cpp_reader_declares_the_same_release_as_python():
+    # The whole point of the constant: a vendored C++ copy is gateable by
+    # version. That only holds while both references answer the same number.
+    assert _cpp_reader_release() == cfio.__version__
+
+
+def test_the_cmake_project_version_is_the_reader_release():
+    # Package metadata is a third place the release can rot. pyproject reads the
+    # module, so Python cannot drift; CMake has its own literal, so it can.
+    assert _cmake_project_version() == cfio.__version__
+
+
+def test_the_cpp_supported_format_version_agrees_too():
+    # The document-side constant has always been duplicated across the two
+    # references; nothing gated it until now.
+    text = CPP_HEADER.read_text(encoding="utf-8")
+    found = re.search(r'SUPPORTED_FORMAT_VERSION\s*=\s*"([^"]+)"', text)
+    assert found, f"no SUPPORTED_FORMAT_VERSION constant in {CPP_HEADER}"
+    assert found.group(1) == cfio.SUPPORTED_FORMAT_VERSION
+
+
+def test_the_cpp_release_obeys_the_shared_version_policy():
+    release = _cpp_reader_release()
+    assert len(release.split(".")) == 3  # readers ship a full MAJOR.MINOR.PATCH
+    assert cfio.check_contract_version(
+        release, cfio.__version__, name="C++ READER_RELEASE") == ".".join(
+            release.split(".")[:2])

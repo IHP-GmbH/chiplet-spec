@@ -345,6 +345,33 @@ void test_typed_writer_stamps_supported_for_higher_minor() {
           "typed/lossy writer stamps SUPPORTED for a higher-minor input");
 }
 
+// The reader RELEASE is declared and well formed. Its VALUE is compared with the
+// Python reference in conformance/test_version_policy.py, the only place that
+// sees both languages; here we pin that the constant exists, is a three-part
+// MAJOR.MINOR.PATCH, and does not quietly disappear in a refactor.
+void test_reader_release_is_declared() {
+    const std::string release = cfio::READER_RELEASE;
+    check(!release.empty(), "READER_RELEASE is not empty");
+    std::istringstream parts(release);
+    std::string part;
+    int count = 0;
+    bool numeric = true;
+    while (std::getline(parts, part, '.')) {
+        ++count;
+        if (part.empty()) {
+            numeric = false;
+            continue;
+        }
+        for (char ch : part) {
+            if (ch < '0' || ch > '9') {
+                numeric = false;
+            }
+        }
+    }
+    check(count == 3, "READER_RELEASE is MAJOR.MINOR.PATCH");
+    check(numeric, "READER_RELEASE components are numeric");
+}
+
 }  // namespace
 
 int main() {
@@ -366,6 +393,7 @@ int main() {
     test_lower_and_higher_major_rejected();
     test_malformed_version_rejected();
     test_typed_writer_stamps_supported_for_higher_minor();
+    test_reader_release_is_declared();
     test_source_has_no_gpl_or_qt_dependency();
 
     std::cout << g_checks << " checks, " << g_failures << " failures\n";
