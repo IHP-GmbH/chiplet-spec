@@ -241,9 +241,9 @@ struct Metadata {
 };
 
 // Top-level parsed document. A faithful, round-trippable view of one .chiplet
-// file. The `flow` build block is preserved verbatim as YAML text (it is
-// host-specific build configuration the spec leaves opaque); consumers that
-// care re-parse `flow_yaml` themselves.
+// file. The `flow` build block is host-specific build configuration the spec
+// leaves opaque, and it is kept as the exact source text rather than as a parsed
+// node; consumers that care re-parse `flow_yaml` themselves.
 struct ChipletDocument {
     std::string format_version;            // always "1.0" after a successful load
     Metadata metadata;                     // the _metadata block
@@ -255,7 +255,15 @@ struct ChipletDocument {
     std::vector<Interface> interfaces;
     Netlist netlist;
     bool has_flow = false;
-    std::string flow_yaml;                 // verbatim YAML of the `flow` block
+    // The `flow` block exactly as it stands in the source: the `flow:` key line
+    // included, original line endings, no trailing-newline normalisation,
+    // nothing stripped. Delimited by the top-level block grammar
+    // (docs/CHIPLET_FORMAT_SPEC.md), which is what lets a host that did not
+    // author the block re-emit it byte for byte, as flow rule 4 requires. It is
+    // NOT a re-serialisation: a node dump re-quotes scalars (a source '0755'
+    // comes back bare, and is then an integer to the next PyYAML reader) and
+    // drops comments. dumps() writes these bytes back unchanged.
+    std::string flow_yaml;
 
     // Non-fatal reader notes (e.g. a same-major higher-minor format_version).
     // Per-document, so there is no global state and a GUI host can surface them

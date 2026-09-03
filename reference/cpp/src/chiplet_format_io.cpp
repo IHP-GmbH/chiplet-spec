@@ -10,11 +10,112 @@
 
 #include <array>
 #include <fstream>
+#include <regex>
 #include <sstream>
+#include <utility>
+#include <vector>
 
 namespace chiplet_format_io {
 
 namespace {
+
+// --- the top-level block grammar -------------------------------------------
+//
+// Flow rule 4 (docs/CHIPLET_FORMAT_SPEC.md) says a host re-emits a flow block it
+// did not author BYTE FOR BYTE. That is a statement about text, so `flow_yaml`
+// is the source slice and not a re-serialisation: YAML::Dump re-quotes scalars
+// by the emitter's rules (a source '0755' comes back bare and is an integer to
+// the next PyYAML reader) and drops comments, which in a hand-written flow carry
+// the author's intent. The grammar is normative in the spec under "Top-level
+// block grammar", and every implementation of it is measured against
+// conformance/fixtures/top_level_blocks_cases.json rather than against another
+// implementation. No YAML is parsed by any of this, on purpose.
+
+// A KEY LINE: a bare key at column zero, optionally followed by whitespace and a
+// value or a comment. Used with regex_match, which anchors both ends, so there
+// is no end anchor to get wrong ($ is wrong in Python, \Z does not exist in
+// ECMAScript). ECMAScript's dot excludes CR as well as LF, so this writes [^\n]
+// where the spec's canonical spelling writes a dot; on a line, which carries no
+// LF, the two mean the same thing.
+const std::regex& key_line_re() {
+    static const std::regex re(
+        R"RX(([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:\s[^\n]*)?)RX");
+    return re;
+}
+
+// A QUOTED key at column zero. Valid YAML, not a key line, and the reason a
+// splitting host refuses the document instead of attaching the block to the
+// preceding key, whose owner regenerates it away on the next export.
+const std::regex& quoted_key_line_re() {
+    static const std::regex re(
+        R"RX((?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'):(?:\s[^\n]*)?)RX");
+    return re;
+}
+
+// The part of a line the grammar matches: no LF, one optional trailing CR
+// removed, so a CRLF document reads exactly like an LF one.
+std::string line_content(const std::string& line) {
+    std::string content = line;
+    if (!content.empty() && content.back() == '\n') content.pop_back();
+    if (!content.empty() && content.back() == '\r') content.pop_back();
+    return content;
+}
+
+// The top-level key `content` opens, or "" when it is not a key line.
+std::string top_level_key(const std::string& content) {
+    std::smatch match;
+    if (!std::regex_match(content, match, key_line_re())) return std::string();
+    return match[1].str();
+}
+
+// Split a document into its top-level blocks, in document order, each one the
+// exact source text: key line included, original line endings, no
+// trailing-newline normalisation, nothing stripped. Lines before the first key
+// line are the PREAMBLE, keyed by the empty string, and are present only when
+// there are any. A repeated key concatenates its runs onto the first occurrence,
+// which keeps its position, so no text is ever dropped. Throws on a quoted key
+// at column zero (the ownership guard).
+std::vector<std::pair<std::string, std::string>> split_top_level_blocks(
+    const std::string& text) {
+    std::vector<std::pair<std::string, std::string>> blocks;
+    blocks.emplace_back(std::string(), std::string());  // the preamble
+    std::size_t current = 0;
+    std::size_t start = 0;
+    // Lines end at LF, full stop. Anything wider (CR, VT, FF, NEL, U+2028) would
+    // grow a top-level block that is not in the file.
+    for (int number = 1; start < text.size(); ++number) {
+        const std::size_t nl = text.find('\n', start);
+        const std::size_t end = (nl == std::string::npos) ? text.size() : nl + 1;
+        const std::string line = text.substr(start, end - start);
+        const std::string content = line_content(line);
+        const std::string key = top_level_key(content);
+        if (!key.empty()) {
+            current = blocks.size();
+            for (std::size_t i = 0; i < blocks.size(); ++i) {
+                if (blocks[i].first == key) {
+                    current = i;
+                    break;
+                }
+            }
+            if (current == blocks.size()) {
+                blocks.emplace_back(key, std::string());
+            }
+        } else if (std::regex_match(content, quoted_key_line_re())) {
+            throw ChipletFormatError(
+                "line " + std::to_string(number) + ": quoted key at column zero (" +
+                content +
+                "). A quoted key is valid YAML but does not start a top-level "
+                "block, so this document cannot be split without attaching the "
+                "block to the preceding key, where its owner drops it on the next "
+                "re-export. Emit bare keys and quote values "
+                "(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).");
+        }
+        blocks[current].second += line;
+        start = end;
+    }
+    if (blocks.front().second.empty()) blocks.erase(blocks.begin());
+    return blocks;
+}
 
 // Read an optional scalar, returning `fallback` when the key is absent or null.
 template <typename T>
@@ -415,6 +516,15 @@ ChipletDocument loads(const std::string& text, const LoadOptions& opts) {
         throw ChipletFormatError("top-level .chiplet document must be a mapping");
     }
 
+    // The grammar runs over the SOURCE TEXT, which is the only place the exact
+    // bytes of a block exist. It also refuses a quoted key at column zero here,
+    // before anything is read out of the document: that spelling cannot be split
+    // without giving one key's block to another. The Python reference's loads()
+    // parses YAML rather than splitting and is not bound by the guard; this
+    // reader splits, so it is.
+    const std::vector<std::pair<std::string, std::string>> blocks =
+        split_top_level_blocks(text);
+
     ChipletDocument doc;
     doc.format_version = as_or<std::string>(root, "format_version", "");
 
@@ -506,7 +616,26 @@ ChipletDocument loads(const std::string& text, const LoadOptions& opts) {
 
     if (root["flow"]) {
         doc.has_flow = true;
-        doc.flow_yaml = YAML::Dump(root["flow"]);
+        const std::string* slice = nullptr;
+        for (const auto& block : blocks) {
+            if (block.first == "flow") {
+                slice = &block.second;
+                break;
+            }
+        }
+        if (slice == nullptr) {
+            // The document has a flow block that the grammar cannot see: not a
+            // bare `flow:` at column zero (a flow-style document, or `flow :`).
+            // Every host that splits would lose it on the next re-export, so it
+            // is refused rather than dropped quietly or handed over as a dump,
+            // which is the re-serialisation this field stopped being.
+            throw ChipletFormatError(
+                "the flow block is not written as a bare `flow:` key at column "
+                "zero, so the top-level block grammar cannot delimit it and its "
+                "bytes cannot be preserved (docs/CHIPLET_FORMAT_SPEC.md, "
+                "top-level block grammar)");
+        }
+        doc.flow_yaml = *slice;
     }
 
     return doc;
@@ -818,15 +947,35 @@ std::string dumps(const ChipletDocument& doc, const DumpOptions& opts) {
         out << YAML::EndMap;
     }
 
-    // Flow block (preserved verbatim).
-    if (doc.has_flow && !doc.flow_yaml.empty()) {
-        YAML::Node flowNode = YAML::Load(doc.flow_yaml);
-        out << YAML::Key << "flow" << YAML::Value << flowNode;
-    }
-
     out << YAML::EndMap;
 
-    return std::string(out.c_str()) + "\n";
+    std::string text = std::string(out.c_str()) + "\n";
+
+    // The flow block, byte for byte (rule 4). `flow_yaml` is the source slice
+    // the reader took, key line included, so it is APPENDED rather than emitted
+    // through the node tree: an emitter would re-quote its scalars and drop its
+    // comments, and this writer is a host that did not author the block. It goes
+    // last, which is where the emitter used to put it.
+    if (doc.has_flow && !doc.flow_yaml.empty()) {
+        std::string block = doc.flow_yaml;
+        const std::size_t nl = block.find('\n');
+        const std::string first = line_content(
+            nl == std::string::npos ? block : block.substr(0, nl + 1));
+        if (top_level_key(first) != "flow") {
+            // A document assembled in memory may still carry the pre-slice
+            // spelling, the flow VALUE without its key line. Wrap it through the
+            // node tree so the emitted document keeps a `flow:` key either way;
+            // that path is lossy, which is exactly why the reader stopped
+            // producing it.
+            YAML::Node wrapper;
+            wrapper["flow"] = YAML::Load(block);
+            block = YAML::Dump(wrapper);
+        }
+        if (block.empty() || block.back() != '\n') block += "\n";
+        text += block;
+    }
+
+    return text;
 }
 
 void dump(const ChipletDocument& doc, const std::string& path,

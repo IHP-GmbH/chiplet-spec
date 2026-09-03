@@ -7,6 +7,10 @@
 
 #include "chiplet_format_io/chiplet_format_io.hpp"
 
+// yaml-cpp is used here only to read the JSON oracle (JSON is YAML), never to
+// judge what the reader produced.
+#include <yaml-cpp/yaml.h>
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -56,6 +60,7 @@ std::string read_file(const std::string& path) {
 const std::string kExamplesDir = CHIPLET_EXAMPLES_DIR;
 const std::string kHeaderFile = CHIPLET_HEADER_FILE;
 const std::string kSourceFile = CHIPLET_SOURCE_FILE;
+const std::string kBlockOracle = CHIPLET_BLOCK_ORACLE;
 
 void test_roundtrip_canonical_example() {
     const std::string path = kExamplesDir + "/interposer_demo_design.chiplet";
@@ -146,16 +151,73 @@ void test_unknown_interface_type_rejected() {
     check_throws([&] { cfio::loads(doc); }, "unknown interface type rejected");
 }
 
-void test_flow_block_preserved() {
+// The flow block is the exact source slice, which is what flow rule 4 needs and
+// what the header has always promised. The predecessor of these tests asserted
+// !flow_yaml.empty() under the label "captured verbatim", which cannot tell a
+// re-serialisation from the source text: it passed just as happily when the
+// field held YAML::Dump(root["flow"]), comments gone and scalars re-quoted.
+//
+// The cases come from conformance/fixtures/top_level_blocks_cases.json, the same
+// file the Python reference and the KiCad plugin's merge splitter run, so the
+// three implementations are measured against one oracle and never against each
+// other.
+void test_flow_block_is_the_exact_source_slice() {
+    const YAML::Node oracle = YAML::LoadFile(kBlockOracle);
+    int cases = 0;
+    for (const auto& c : oracle["splits"]) {
+        // A splitter-only document (a repeated top-level key) is not one a
+        // reader is required to load.
+        if (c["loadable"] && !c["loadable"].as<bool>()) continue;
+        const std::string name = c["name"].as<std::string>();
+        std::string expected;
+        bool has_flow = false;
+        for (const auto& b : c["blocks"]) {
+            if (b["key"].as<std::string>() == "flow") {
+                expected = b["text"].as<std::string>();
+                has_flow = true;
+            }
+        }
+        if (!has_flow) continue;
+        ++cases;
+        cfio::ChipletDocument parsed = cfio::loads(c["doc"].as<std::string>());
+        check(parsed.has_flow, name + ": flow block detected");
+        check(parsed.flow_yaml == expected,
+              name + ": flow_yaml is the source slice, byte for byte");
+    }
+    check(cases >= 5, "the oracle still carries the flow split cases");
+}
+
+// Rule 4 end to end: a document this writer did not author goes out with the
+// same bytes it came in with. A node dump fails this on the comment alone.
+void test_flow_block_is_re_emitted_byte_for_byte() {
+    const YAML::Node oracle = YAML::LoadFile(kBlockOracle);
     const std::string doc =
-        "format_version: \"1.0\"\nassembly:\n  name: a\n"
-        "flow:\n  steps:\n  - name: export\n    tool: kicad\n";
+        oracle["splits"][0]["doc"].as<std::string>();
     cfio::ChipletDocument parsed = cfio::loads(doc);
-    check(parsed.has_flow, "flow block detected");
-    check(!parsed.flow_yaml.empty(), "flow block captured verbatim");
-    // It survives a round trip.
-    cfio::ChipletDocument reloaded = cfio::loads(cfio::dumps(parsed));
+    const std::string written = cfio::dumps(parsed);
+    check(written.find(parsed.flow_yaml) != std::string::npos,
+          "dumps() writes the flow slice verbatim");
+    cfio::ChipletDocument reloaded = cfio::loads(written);
     check(reloaded.has_flow, "flow block survives dump/load");
+    check(reloaded.flow_yaml == parsed.flow_yaml,
+          "flow block round-trips byte for byte");
+    check(parsed.flow_yaml.find("# export first") != std::string::npos,
+          "the case under test carries the comment a node dump would drop");
+}
+
+// A quoted key at column zero is valid YAML and is NOT a top-level key line, so
+// a splitter would hand the block to the preceding key, whose owner regenerates
+// it away on the next export. This reader splits, so it refuses the document.
+void test_quoted_key_at_column_zero_refused() {
+    const YAML::Node oracle = YAML::LoadFile(kBlockOracle);
+    int cases = 0;
+    for (const auto& c : oracle["refuse"]) {
+        ++cases;
+        const std::string doc = c["doc"].as<std::string>();
+        check_throws([&] { cfio::loads(doc); },
+                     c["name"].as<std::string>() + ": refused");
+    }
+    check(cases >= 3, "the oracle still carries the refuse cases");
 }
 
 void test_interconnect_adapter_and_technology() {
@@ -386,7 +448,9 @@ int main() {
     test_dump_roundtrips_components_order();
     test_attachment_surface_z_roundtrip();
     test_unknown_interface_type_rejected();
-    test_flow_block_preserved();
+    test_flow_block_is_the_exact_source_slice();
+    test_flow_block_is_re_emitted_byte_for_byte();
+    test_quoted_key_at_column_zero_refused();
     test_interconnect_adapter_and_technology();
     test_technology_stackup_roundtrip();
     test_higher_minor_warns_and_accepts();

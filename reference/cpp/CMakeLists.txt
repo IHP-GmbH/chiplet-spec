@@ -42,6 +42,10 @@ if(CHIPLET_FORMAT_IO_BUILD_TESTS)
   target_compile_definitions(test_chiplet_format_io PRIVATE
     CHIPLET_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../examples"
     CHIPLET_HEADER_FILE="${CMAKE_CURRENT_SOURCE_DIR}/include/chiplet_format_io/chiplet_format_io.hpp"
-    CHIPLET_SOURCE_FILE="${CMAKE_CURRENT_SOURCE_DIR}/src/chiplet_format_io.cpp")
+    CHIPLET_SOURCE_FILE="${CMAKE_CURRENT_SOURCE_DIR}/src/chiplet_format_io.cpp"
+    # The shared top-level block grammar oracle. The Python reference and the
+    # KiCad plugin's merge splitter run this same file; three implementations of
+    # one grammar are compared to it, never to each other.
+    CHIPLET_BLOCK_ORACLE="${CMAKE_CURRENT_SOURCE_DIR}/../../conformance/fixtures/top_level_blocks_cases.json")
   add_test(NAME chiplet_format_io COMMAND test_chiplet_format_io)
 endif()
