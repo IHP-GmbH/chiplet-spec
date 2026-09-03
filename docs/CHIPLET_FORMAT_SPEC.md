@@ -798,10 +798,14 @@ end of file. Three consequences, all of them normative:
 - Lines before the first key line (a leading `---`, a file header comment) are a
   PREAMBLE that belongs to no key. An implementation that exposes the preamble
   uses the empty string as its key.
-- A repeated top-level key concatenates its runs onto the FIRST occurrence, which
-  keeps its position. Such a document is malformed for an unrelated reason
-  (readers disagree on which value wins: PyYAML takes the last, yaml-cpp the
-  first), but the splitter still never drops or reorders text.
+- A repeated top-level key is ILL-FORMED, and a reader MUST refuse the document at
+  load: PyYAML resolves such a key to the last value and yaml-cpp to the first, so
+  two conforming readers read different documents from one file, and neither the
+  schema nor a parsed node tree can see that it happened. The refusal is on the
+  text, because that is the only place the repeat still exists. A splitter could
+  concatenate the two runs under the first occurrence without dropping a byte,
+  which is what this specification used to say; that decides who owns the text and
+  says nothing about which value wins, so it is no longer enough.
 
 ### Raw block text
 

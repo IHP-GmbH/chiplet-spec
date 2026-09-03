@@ -356,10 +356,22 @@ def validate(data: Dict[str, Any], *, allow_intermediate: bool = False,
 
 def loads(text: str, *, allow_intermediate: bool = False, validate: bool = True,
           on_warn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
-    """Parse a .chiplet document from a YAML string into a dict."""
+    """Parse a .chiplet document from a YAML string into a dict.
+
+    Refuses a document with a REPEATED top-level key, on the source text, before
+    anything is read out of it. That is not a style rule: PyYAML keeps the last
+    value and yaml-cpp the first, so this reader and the C++ one would report
+    different documents from one file, and nothing downstream, schema included,
+    can tell. It is the only text-level refusal here; a quoted key at column zero
+    makes a document unsplittable, not invalid, and is read normally (see
+    :func:`top_level_blocks` and flow rule 1).
+    """
     data = yaml.safe_load(text)
     if data is None:
         raise ChipletFormatError("empty .chiplet document")
+    # One pass over the text. Cheap, and it is the only place the repeat is
+    # visible: `data` above has already resolved it away.
+    _scan_top_level(text)
     if validate:
         _validate(data, allow_intermediate=allow_intermediate, on_warn=on_warn)
     return data
@@ -487,6 +499,53 @@ def top_level_key(line_content: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _scan_top_level(text: str) -> Tuple[Dict[str, str], Optional[str]]:
+    """One pass over the source text: the blocks, and why they may be unusable.
+
+    Returns ``(blocks, not_splittable)``. ``not_splittable`` is ``None`` for a
+    document that can be split, and otherwise the reason it cannot be, which the
+    splitting accessors raise and :func:`loads` ignores. The two are different
+    verdicts: a quoted key at column zero leaves nobody able to say who owns
+    those bytes, and that is a reason not to SPLIT or WRITE the document, not a
+    reason to refuse to read it.
+
+    Raises :class:`ChipletFormatError` for a REPEATED top-level key, which is a
+    different thing again: that document is ill-formed and every caller here,
+    :func:`loads` included, refuses it. PyYAML resolves a repeated key to the
+    last value and yaml-cpp to the first, so no reading of it is conforming.
+    """
+    blocks: Dict[str, str] = {PREAMBLE_KEY: ""}
+    current = PREAMBLE_KEY
+    not_splittable: Optional[str] = None
+    for number, line in enumerate(_iter_lines(text), start=1):
+        content = _content(line)
+        key = top_level_key(content)
+        if key is not None:
+            if key in blocks:
+                raise ChipletFormatError(
+                    f"line {number}: repeated top-level key {key!r}. A document "
+                    f"names each top-level key once. PyYAML resolves a repeat "
+                    f"to the LAST value and yaml-cpp to the FIRST, so two "
+                    f"conforming readers read different documents from these "
+                    f"bytes, and neither the schema nor a parsed node tree can "
+                    f"see that it happened "
+                    f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
+            current = key
+            blocks[key] = ""
+        elif not_splittable is None and _QUOTED_KEY_LINE_RE.match(content):
+            not_splittable = (
+                f"line {number}: quoted key at column zero ({content!r}). A "
+                f"quoted key is valid YAML but does not start a top-level "
+                f"block, so this document cannot be split without attaching "
+                f"the block to the preceding key, where its owner drops it on "
+                f"the next re-export. Emit bare keys and quote values "
+                f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
+        blocks[current] += line
+    if not blocks[PREAMBLE_KEY]:
+        del blocks[PREAMBLE_KEY]
+    return blocks, not_splittable
+
+
 def top_level_blocks(text: str) -> Dict[str, str]:
     """Split a .chiplet document into its top-level blocks, in document order.
 
@@ -494,34 +553,20 @@ def top_level_blocks(text: str) -> Dict[str, str]:
     but excluding the next key line, or to end of file, and the text is the
     SOURCE BYTES: key line included, original line endings, no trailing-newline
     normalisation, nothing stripped. Lines before the first key line land under
-    :data:`PREAMBLE_KEY`, which is present only when there are any. A repeated
-    top-level key concatenates its runs onto the first occurrence, which keeps
-    its position, so no text is ever dropped.
+    :data:`PREAMBLE_KEY`, which is present only when there are any.
 
-    Raises :class:`ChipletFormatError` for a quoted key at column zero: it is not
-    a key line, so splitting would attach that block to the preceding key and
-    lose it on the next re-export. :func:`loads` parses YAML rather than
-    splitting and is not bound by that guard; this function is.
+    Raises :class:`ChipletFormatError` twice over, for two different reasons:
+
+    * a quoted key at column zero. It is not a key line, so splitting would
+      attach that block to the preceding key and lose it on the next re-export.
+      The document is still valid and :func:`loads` still reads it; splitting is
+      what cannot be done.
+    * a repeated top-level key. That document is ill-formed and :func:`loads`
+      refuses it too.
     """
-    blocks: Dict[str, str] = {}
-    current = PREAMBLE_KEY
-    blocks[PREAMBLE_KEY] = ""
-    for number, line in enumerate(_iter_lines(text), start=1):
-        content = _content(line)
-        key = top_level_key(content)
-        if key is not None:
-            current = key
-        elif _QUOTED_KEY_LINE_RE.match(content):
-            raise ChipletFormatError(
-                f"line {number}: quoted key at column zero ({content!r}). A "
-                f"quoted key is valid YAML but does not start a top-level "
-                f"block, so this document cannot be split without attaching "
-                f"the block to the preceding key, where its owner drops it on "
-                f"the next re-export. Emit bare keys and quote values "
-                f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
-        blocks[current] = blocks.get(current, "") + line
-    if not blocks[PREAMBLE_KEY]:
-        del blocks[PREAMBLE_KEY]
+    blocks, not_splittable = _scan_top_level(text)
+    if not_splittable is not None:
+        raise ChipletFormatError(not_splittable)
     return blocks
 
 

@@ -21,10 +21,19 @@
 # it back (write_assembly dumps assembly.raw), so it is passthrough for
 # round-trip and writer purposes; only the C++ struct reader is typed-lossy
 # (no raw retention). ir's writer parity is asserted in interposer-pnr's suite.
+#
+# Source-text dimension (`reads_source_text`): whether the reader sees the BYTES
+# of the document or only a parsed node tree. It decides one thing, and only one:
+# whether the top-level block grammar (docs/CHIPLET_FORMAT_SPEC.md) is something
+# the reader can apply at all. ir is handed an already-parsed mapping, so a
+# repeated top-level key has been resolved away before it is called and it cannot
+# be asked about it; an expectation tagged `source_text_only: true` is skipped
+# (not failed) for such a reader, the same way `passthrough_only` is skipped for a
+# typed one. Everything NOT so tagged applies to every reader, as before.
 implementations:
-  reference_python:   {class: passthrough, writes: true}
-  interposer_pnr_ir:  {class: passthrough, writes: true}
-  reference_cpp:      {class: typed,       writes: true}
+  reference_python:   {class: passthrough, writes: true, reads_source_text: true}
+  interposer_pnr_ir:  {class: passthrough, writes: true, reads_source_text: false}
+  reference_cpp:      {class: typed,       writes: true, reads_source_text: true}
 
 fixtures:
   - file: v1_0_baseline.chiplet
@@ -103,3 +112,12 @@ fixtures:
   - file: v1_0_flow_not_delimitable.chiplet
     expect: accept
     version: "1.0"
+
+  # Ill-formed on the TEXT and nowhere else: `flow` appears twice at column zero.
+  # PyYAML resolves it to the last value and yaml-cpp to the first, so the two
+  # reference readers would report different documents from these bytes and
+  # neither the schema nor a parsed node tree can see that anything happened.
+  # Refused at load by every reader that sees the source text.
+  - file: v1_0_repeated_top_level_key.chiplet
+    expect: refuse
+    source_text_only: true

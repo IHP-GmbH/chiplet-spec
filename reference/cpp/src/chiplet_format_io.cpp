@@ -101,16 +101,21 @@ std::vector<std::pair<std::string, std::string>> split_top_level_blocks(
         const std::string content = line_content(line);
         const std::string key = top_level_key(content);
         if (!key.empty()) {
-            current = blocks.size();
-            for (std::size_t i = 0; i < blocks.size(); ++i) {
-                if (blocks[i].first == key) {
-                    current = i;
-                    break;
+            for (const auto& block : blocks) {
+                if (block.first == key) {
+                    throw ChipletFormatError(
+                        "line " + std::to_string(number) +
+                        ": repeated top-level key (" + key +
+                        "). A document names each top-level key once. PyYAML "
+                        "resolves a repeat to the LAST value and yaml-cpp to the "
+                        "FIRST, so two conforming readers read different "
+                        "documents from these bytes, and neither the schema nor "
+                        "a parsed node tree can see that it happened "
+                        "(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).");
                 }
             }
-            if (current == blocks.size()) {
-                blocks.emplace_back(key, std::string());
-            }
+            blocks.emplace_back(key, std::string());
+            current = blocks.size() - 1;
         } else if (std::regex_match(content, quoted_key_line_re()) &&
                    not_splittable != nullptr && not_splittable->empty()) {
             *not_splittable =

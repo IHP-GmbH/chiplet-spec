@@ -1,5 +1,5 @@
 {
-  "$comment": "Accept/reject oracle for the TOP-LEVEL BLOCK GRAMMAR of a .chiplet document (docs/CHIPLET_FORMAT_SPEC.md, 'Top-level block grammar'). The grammar answers one question on the raw text, never on a parsed node tree: which run of lines belongs to which top-level key. Flow rule 4 (a host re-emits a flow block it did not author byte for byte) is defined in terms of it, and three implementations run THIS file rather than being compared to each other: the merge splitter in the KiCad plugin (chiplet_merge.split_top_level_blocks), the Python reference (chiplet_format_io.top_level_blocks) and the C++ reference (ChipletDocument::flow_yaml). Add a case here, never in a consumer. key_lines: 'line' is LINE CONTENT, i.e. the text up to the next LF with one optional trailing CR already removed; 'key' is capture group 1 of ^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:\\\\s.*)? anchored at both ends. Anchoring note, the same one adapter_id_cases.json carries: end the expression with \\\\Z in Python re or (?![\\\\s\\\\S]) portably, or match the whole content (std::regex_match); $ is WRONG in Python (it also matches before a trailing newline). ECMAScript's . excludes CR as well as LF, so a std::regex implementation writes [^\\\\n] where the expression writes . ; on a line the two mean the same thing. splits: 'doc' is the whole document text and 'blocks' is the exact slice per top-level key in document order, key line included, line endings untouched, nothing normalised. The empty key is the PREAMBLE (lines before the first key line). Concatenating every slice in order reproduces 'doc' byte for byte, which is the property that makes the grammar lossless. A case with \"loadable\": false is a splitter-only document that no reader is required to load. THE THREE VERDICTS ARE INDEPENDENT, and confusing them is the defect this file now pins: a document can be loadable and not splittable, and splittable and not writable. refuse: documents a SPLITTER refuses. A quoted key at column zero is valid YAML but is NOT a key line, so a splitter would attach its block to the preceding key, where that key's owner regenerates it away on the next re-export; splitting is refused instead of mis-attributing. \"loads\" says whether a READER still loads the document: true for the quoted key (flow rule 1 forbids rejecting a document over a block a host cannot handle), false only where no reading is conforming. \"writes\", meaningful only when \"loads\" is true, says whether a writer that preserves the flow block's SOURCE BYTES can write the document back; a canonical writer that has no source slice at all (the Python reference's dumps()) is not bound by it. not_delimitable: documents that split perfectly well but whose flow node the grammar cannot delimit, because it is not written as a bare `flow:` key line at column zero (a flow-style document, or `flow :`). Every reader LOADS them, the split simply produces no 'flow' key, and a source-slice writer MUST refuse to write them back: the block's bytes were never captured, so the only alternatives are dropping the block or emitting a re-serialisation in the place the source text belongs.",
+  "$comment": "Accept/reject oracle for the TOP-LEVEL BLOCK GRAMMAR of a .chiplet document (docs/CHIPLET_FORMAT_SPEC.md, 'Top-level block grammar'). The grammar answers one question on the raw text, never on a parsed node tree: which run of lines belongs to which top-level key. Flow rule 4 (a host re-emits a flow block it did not author byte for byte) is defined in terms of it, and three implementations run THIS file rather than being compared to each other: the merge splitter in the KiCad plugin (chiplet_merge.split_top_level_blocks), the Python reference (chiplet_format_io.top_level_blocks) and the C++ reference (ChipletDocument::flow_yaml). Add a case here, never in a consumer. key_lines: 'line' is LINE CONTENT, i.e. the text up to the next LF with one optional trailing CR already removed; 'key' is capture group 1 of ^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:\\\\s.*)? anchored at both ends. Anchoring note, the same one adapter_id_cases.json carries: end the expression with \\\\Z in Python re or (?![\\\\s\\\\S]) portably, or match the whole content (std::regex_match); $ is WRONG in Python (it also matches before a trailing newline). ECMAScript's . excludes CR as well as LF, so a std::regex implementation writes [^\\\\n] where the expression writes . ; on a line the two mean the same thing. splits: 'doc' is the whole document text and 'blocks' is the exact slice per top-level key in document order, key line included, line endings untouched, nothing normalised. The empty key is the PREAMBLE (lines before the first key line). Concatenating every slice in order reproduces 'doc' byte for byte, which is the property that makes the grammar lossless, and every split case has it: the one case that did not (a repeated top-level key, whose two runs joined under the first occurrence) is now a refuse case. A case with \"loadable\": false is a splitter-only document that no reader is required to load. THE THREE VERDICTS ARE INDEPENDENT, and confusing them is the defect this file now pins: a document can be loadable and not splittable, and splittable and not writable. refuse: documents a SPLITTER refuses, each tagged with its \"kind\". A quoted key at column zero is valid YAML but is NOT a key line, so a splitter would attach its block to the preceding key, where that key's owner regenerates it away on the next re-export; splitting is refused instead of mis-attributing. \"loads\" says whether a READER still loads the document: true for the quoted key (flow rule 1 forbids rejecting a document over a block a host cannot handle), false for a repeated top-level key, where no reading is conforming at all because PyYAML takes the last value and yaml-cpp the first. \"writes\", meaningful only when \"loads\" is true, says whether a writer that preserves the flow block's SOURCE BYTES can write the document back; a canonical writer that has no source slice at all (the Python reference's dumps()) is not bound by it. not_delimitable: documents that split perfectly well but whose flow node the grammar cannot delimit, because it is not written as a bare `flow:` key line at column zero (a flow-style document, or `flow :`). Every reader LOADS them, the split simply produces no 'flow' key, and a source-slice writer MUST refuse to write them back: the block's bytes were never captured, so the only alternatives are dropping the block or emitting a re-serialisation in the place the source text belongs.",
   "key_lines": {
     "accept": [
       {
@@ -181,31 +181,6 @@
       ]
     },
     {
-      "name": "repeated_top_level_key_concatenates_onto_the_first_occurrence",
-      "doc": "format_version: \"1.0\"\nassembly:\n  name: demo\nflow:\n  steps: []\nnetlist:\n  nets: []\nflow:\n  extra: true\n",
-      "blocks": [
-        {
-          "key": "format_version",
-          "text": "format_version: \"1.0\"\n"
-        },
-        {
-          "key": "assembly",
-          "text": "assembly:\n  name: demo\n"
-        },
-        {
-          "key": "flow",
-          "text": "flow:\n  steps: []\nflow:\n  extra: true\n"
-        },
-        {
-          "key": "netlist",
-          "text": "netlist:\n  nets: []\n"
-        }
-      ],
-      "note": "Splitter-only. The first occurrence keeps its position and the runs concatenate, so no text is dropped; the document itself is malformed, and not in a way the splitter can repair: PyYAML resolves flow to the last value, yaml-cpp to the first.",
-      "loadable": false,
-      "reconstructs": false
-    },
-    {
       "name": "indented_and_commented_key_shaped_lines_stay_inside_their_block",
       "doc": "format_version: \"1.0\"\nassembly:\n  name: demo\n  # flow:\n  flow: not a top level key\nflow:\n  steps: []\n",
       "blocks": [
@@ -229,6 +204,7 @@
   "refuse": [
     {
       "name": "double_quoted_key_at_column_zero",
+      "kind": "quoted_key_at_column_zero",
       "doc": "format_version: \"1.0\"\nassembly:\n  name: demo\n\"flow\":\n  steps: []\n",
       "reason": "A splitter attaches \"flow\": and its body to the assembly block, where the exporter owns them and regenerates them away on the next export. Refuse instead of mis-attributing.",
       "loads": true,
@@ -236,6 +212,7 @@
     },
     {
       "name": "single_quoted_key_at_column_zero",
+      "kind": "quoted_key_at_column_zero",
       "doc": "format_version: \"1.0\"\nassembly:\n  name: demo\n'flow':\n  steps: []\n",
       "reason": "Same guard for the single-quoted spelling.",
       "loads": true,
@@ -243,10 +220,18 @@
     },
     {
       "name": "quoted_key_at_column_zero_without_a_flow_block",
+      "kind": "quoted_key_at_column_zero",
       "doc": "format_version: \"1.0\"\n\"assembly\":\n  name: demo\n",
       "reason": "The guard is about block ownership, not about flow: a document with a quoted key at column zero is refused whether or not it carries a flow block. This is the spelling a document-wide key-quoting emitter switch produces (validation rule 7).",
       "loads": true,
       "writes": true
+    },
+    {
+      "name": "repeated_top_level_key_is_ill_formed",
+      "kind": "repeated_top_level_key",
+      "doc": "format_version: \"1.0\"\nassembly:\n  name: demo\nflow:\n  steps: []\nnetlist:\n  nets: []\nflow:\n  extra: true\n",
+      "reason": "A document names each top-level key once. This one names flow twice, and there is no reading of it that is conforming: PyYAML resolves the key to the LAST value, yaml-cpp to the FIRST, so two conforming readers build different documents from these bytes. The splitter could concatenate the runs without dropping a byte, which is what it used to do, but that only decides who owns the text and not which value wins, and neither the schema nor a parsed node tree can see that anything happened. Refused on the text, at load, by every reader.",
+      "loads": false
     }
   ],
   "not_delimitable": [

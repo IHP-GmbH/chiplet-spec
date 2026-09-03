@@ -34,6 +34,12 @@ SPLITS = CASES["splits"]
 REFUSE = CASES["refuse"]
 NOT_DELIMITABLE = CASES["not_delimitable"]
 
+#: The two kinds of refusal, kept apart because they are not the same verdict: a
+#: quoted key at column zero is a valid document nobody can split, a repeated
+#: top-level key is a document no reader may read.
+NOT_SPLITTABLE = [c for c in REFUSE if c["kind"] == "quoted_key_at_column_zero"]
+ILL_FORMED = [c for c in REFUSE if c["kind"] == "repeated_top_level_key"]
+
 #: A quoted key at column zero, in the spelling the refuse cases must carry.
 _QUOTED_KEY = re.compile(r'^(?:"[^"]*"|\'[^\']*\'):(?:\s.*)?\Z')
 
@@ -60,6 +66,10 @@ def test_oracle_is_wellformed():
     # (which an implementation anchoring on ECMAScript's narrower dot gets wrong).
     assert '"flow":' in REJECT
     assert any("crlf" in c["name"] for c in SPLITS)
+    # Both refusal kinds are present. A kind that quietly empties out takes its
+    # whole parametrized test with it and leaves a green run behind.
+    assert NOT_SPLITTABLE and ILL_FORMED
+    assert len(NOT_SPLITTABLE) + len(ILL_FORMED) == len(REFUSE)
 
 
 @pytest.mark.parametrize("case", SPLITS, ids=lambda c: c["name"])
@@ -72,23 +82,32 @@ def test_oracle_split_case_is_wellformed(case):
         assert block["text"], block
         if block["key"]:
             assert block["text"].startswith(block["key"] + ":"), block
-    # Lossless by construction: the slices tile the document. A repeated key is
-    # the one exception (its runs are joined under the first occurrence), and
-    # that case says so.
-    if case.get("reconstructs", True):
-        assert "".join(b["text"] for b in case["blocks"]) == case["doc"]
+    # Lossless by construction: the slices tile the document, with no exception.
+    # The one case that used to need one, a repeated top-level key whose two runs
+    # were joined under the first occurrence, is a refuse case now.
+    assert "".join(b["text"] for b in case["blocks"]) == case["doc"]
+    assert "reconstructs" not in case
 
 
 @pytest.mark.parametrize("case", REFUSE, ids=lambda c: c["name"])
 def test_oracle_refuse_case_is_wellformed(case):
     assert case["doc"] and case["reason"]
     assert isinstance(case["loads"], bool)
-    quoted = [ln for ln in case["doc"].split("\n") if _QUOTED_KEY.match(ln)]
-    assert quoted, "a refuse case must carry a quoted key at column zero"
-    # "writes" is a statement about a source-slice writer and only means anything
-    # for a document a reader can hold in the first place.
-    assert case["loads"] is True
-    assert isinstance(case["writes"], bool)
+    if case["kind"] == "quoted_key_at_column_zero":
+        quoted = [ln for ln in case["doc"].split("\n") if _QUOTED_KEY.match(ln)]
+        assert quoted, "the case must carry a quoted key at column zero"
+        # Valid YAML, so it loads; "writes" is a statement about a source-slice
+        # writer and only means anything for a document a reader can hold.
+        assert case["loads"] is True
+        assert isinstance(case["writes"], bool)
+    elif case["kind"] == "repeated_top_level_key":
+        keys = [k for k in (cfio.top_level_key(ln)
+                            for ln in case["doc"].split("\n")) if k]
+        assert len(keys) != len(set(keys)), "the case must repeat a key"
+        assert case["loads"] is False
+        assert "writes" not in case, "a document no reader holds is never written"
+    else:
+        raise AssertionError("unknown refuse kind " + case["kind"])
 
 
 @pytest.mark.parametrize("case", NOT_DELIMITABLE, ids=lambda c: c["name"])
@@ -134,7 +153,18 @@ def test_splitting_is_refused(case):
         cfio.top_level_block(case["doc"], "flow")
 
 
-@pytest.mark.parametrize("case", REFUSE, ids=lambda c: c["name"])
+@pytest.mark.parametrize("case", ILL_FORMED, ids=lambda c: c["name"])
+def test_an_ill_formed_document_is_refused_at_load(case):
+    # The other half of the asymmetry. A repeated top-level key is not a question
+    # of ownership that only a splitter has to answer: PyYAML keeps the LAST value
+    # and yaml-cpp the FIRST, so the two reference readers would report different
+    # documents from one file and nothing downstream could tell. There is no
+    # conforming reading, so there is no reading.
+    with pytest.raises(cfio.ChipletFormatError):
+        cfio.loads(case["doc"])
+
+
+@pytest.mark.parametrize("case", NOT_SPLITTABLE, ids=lambda c: c["name"])
 def test_a_document_a_splitter_refuses_is_still_read(case):
     # Splitting and reading are different verdicts. A quoted key at column zero
     # is an ordinary key to YAML: the document is structurally valid, and flow
@@ -142,8 +172,6 @@ def test_a_document_a_splitter_refuses_is_still_read(case):
     # file. Refusing here would make the reference reader stricter than the spec
     # it defines, over a question (who owns which bytes) that only a host writing
     # the file back has to answer.
-    if not case["loads"]:
-        pytest.skip("this document is ill-formed and refused at load")
     assert cfio.loads(case["doc"])["assembly"]["name"]
 
 
