@@ -744,7 +744,7 @@ with capture group 1 as the key. Line CONTENT is the text up to the next LF with
 one optional trailing CR removed, so a CRLF document reads exactly like an LF one;
 the terminator is never part of what is matched.
 
-Two anchoring notes, each of which has already cost this format family a defect:
+Three notes, each of which has already cost this format family a defect:
 
 - End the expression with `\Z` (Python `re`) or `(?![\s\S])` (portable, and the
   spelling `schemas/chiplet.schema.json` uses for the same reason), or match the
@@ -755,6 +755,12 @@ Two anchoring notes, each of which has already cost this format family a defect:
 - ECMAScript `.` excludes CR as well as LF, unlike Python's, so a `std::regex`
   implementation writes `[^\n]` where the expression above writes `.`. On a line,
   which by definition carries no LF, the two mean the same thing.
+- A line ends at LF, and nowhere else. Python's `str.splitlines()` also breaks on
+  CR, VT, FF, U+0085, U+2028 and U+2029, so a splitter built on it grows a
+  top-level block out of any quoted scalar carrying one of those: an
+  `assembly.name` of `"demo<U+2028>flow: injected"` becomes a `flow` block that is
+  not in the file, and a merge then hands a foreign host bytes that came out of
+  somebody's assembly name. Iterate on LF by hand. The oracle carries this case.
 
 What follows from the expression, each of these a case in the oracle: an indented
 `  flow:` is not a key line and stays inside the block it sits in; `flow: value`

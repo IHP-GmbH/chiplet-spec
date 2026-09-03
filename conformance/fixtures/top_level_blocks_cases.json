@@ -140,6 +140,25 @@
       "note": "The CR is removed to decide whether a line is a key line, and kept in the slice. An implementation that anchors with ECMAScript's . instead of [^\\n] fails the key line 'flow: value\\r' here."
     },
     {
+      "name": "unicode_line_separator_inside_a_scalar_is_not_a_line_break",
+      "doc": "format_version: \"1.0\"\nassembly:\n  name: \"demo\u2028flow: injected\"\nflow:\n  steps: []\n",
+      "blocks": [
+        {
+          "key": "format_version",
+          "text": "format_version: \"1.0\"\n"
+        },
+        {
+          "key": "assembly",
+          "text": "assembly:\n  name: \"demo\u2028flow: injected\"\n"
+        },
+        {
+          "key": "flow",
+          "text": "flow:\n  steps: []\n"
+        }
+      ],
+      "note": "assembly.name carries U+2028 LINE SEPARATOR followed by `flow: injected`, all inside one double-quoted scalar. The grammar defines a line as LF-terminated with one optional preceding CR and nothing else, so there is no line break there and no key line: the whole scalar stays in the assembly block. An implementation that splits with Python's str.splitlines(), which also breaks on CR, VT, FF, U+0085, U+2028 and U+2029, grows a `flow` block that is not in the file and hands a foreign host a block whose bytes came out of somebody's assembly name. That is the whole case, and it is why both reference readers iterate on LF by hand."
+    },
+    {
       "name": "document_that_starts_with_a_marker_has_a_preamble",
       "doc": "---\nformat_version: \"1.0\"\nassembly:\n  name: demo\nflow:\n  steps: []\n",
       "blocks": [
