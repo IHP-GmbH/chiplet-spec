@@ -703,3 +703,28 @@ def test_the_two_ruled_sweep_rows_keep_their_wording():
     assert "1.1" in solder and "out of contract" in solder
     io_class = next(w for c, w in rows.items() if "io_class" in c)
     assert "fifteen" in io_class and "research/aspdac2027" in io_class
+
+
+def test_the_dividing_line_justifies_the_minor_at_ELEMENT_level():
+    """The reason a new enum member is a MINOR must not contradict the criterion.
+
+    The text once read "a minor precisely because a consumer that does not know
+    the value refuses the document instead of misreading it". Under the sentence
+    two lines above it (a MINOR only adds what a consumer can IGNORE and remain
+    correct) a consumer that refuses the document has not ignored anything, so
+    that justification made every added enum member a MAJOR by the policy's own
+    test. It also gave normative cover to exactly the whole-document refusal
+    SPEC-25 exists to remove. Right conclusion, wrong reason, in normative text.
+
+    What a green here does NOT cover: whether any consumer actually refuses at
+    element level. This reads a document; the behaviour is SPEC-25's and the
+    per-consumer rows own it.
+    """
+    policy = (ROOT / "docs" / "VERSION_POLICY.md").read_text(encoding="utf-8")
+    line = policy.split("The dividing line", 1)[1].split("## Changing the major", 1)[0]
+    assert "refuse the ELEMENT that carries it" in line
+    assert "incomplete rather than wrong" in line
+    assert "refuses the document instead of misreading it" not in policy, \
+        "the retired justification is back"
+    # The trap has to stay written down, not just avoided.
+    assert "would eat the criterion" in line

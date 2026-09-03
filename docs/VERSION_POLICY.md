@@ -78,9 +78,19 @@ a MINOR only adds what a consumer can ignore and remain correct, and whatever a
 consumer must honour to stay correct is a MAJOR. It is a question about the
 CHANGE, not about the diff. A new optional key a reader may skip is a minor; the
 same key is a major the moment skipping it makes the reader wrong rather than
-incomplete, and a new value in a closed vocabulary is a minor precisely because
-a consumer that does not know the value refuses the document instead of
-misreading it.
+incomplete, and a new value in a closed vocabulary is a minor because a consumer
+that does not know the value can refuse the ELEMENT that carries it and report
+it, ending up incomplete rather than wrong.
+
+That subordinate clause has to say ELEMENT. Refusing the whole DOCUMENT does not
+qualify under the sentence above it: a consumer that cannot open the file has
+not ignored the value and remained correct, so if refusing the document were the
+reason, every added enum member would be a MAJOR by this policy's own test. The
+justification would eat the criterion two lines above it. This is also why the
+mark on an unrecognised member is structural rather than a matter of taste: the
+element-level refusal is what makes the MINOR label true, so a consumer that
+refuses documents instead of elements is not being strict, it is turning a
+MINOR into a MAJOR for everyone downstream.
 
 ## Changing the major
 
