@@ -220,6 +220,28 @@ void test_quoted_key_at_column_zero_refused() {
     check(cases >= 3, "the oracle still carries the refuse cases");
 }
 
+// A flow block the grammar cannot delimit: a flow-style document, or a key line
+// spelled `flow :`, which YAML reads as the key `flow` and the grammar does not
+// see at all. Either way the block has no slice, so re-emitting it byte for byte
+// is impossible; the reader says so instead of handing back an empty field that
+// dumps() would drop, or a dump that looks like the source text and is not.
+void test_flow_block_the_grammar_cannot_delimit_is_refused() {
+    check_throws([&] {
+        cfio::loads("{format_version: \"1.0\", assembly: {name: a}, "
+                    "flow: {steps: []}}\n");
+    }, "flow-style document refused");
+    check_throws([&] {
+        cfio::loads("format_version: \"1.0\"\nassembly:\n  name: a\n"
+                    "flow :\n  steps: []\n");
+    }, "`flow :` refused");
+    // Without a flow block, both spellings of the same document are fine: the
+    // grammar only has to delimit what is there.
+    cfio::ChipletDocument parsed =
+        cfio::loads("{format_version: \"1.0\", assembly: {name: a}}\n");
+    check(!parsed.has_flow && parsed.assembly.name == "a",
+          "a flow-style document without a flow block still loads");
+}
+
 void test_interconnect_adapter_and_technology() {
     const std::string doc =
         "format_version: \"1.0\"\nassembly:\n  name: a\n"
@@ -451,6 +473,7 @@ int main() {
     test_flow_block_is_the_exact_source_slice();
     test_flow_block_is_re_emitted_byte_for_byte();
     test_quoted_key_at_column_zero_refused();
+    test_flow_block_the_grammar_cannot_delimit_is_refused();
     test_interconnect_adapter_and_technology();
     test_technology_stackup_roundtrip();
     test_higher_minor_warns_and_accepts();
