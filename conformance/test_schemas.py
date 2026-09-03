@@ -1,15 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 IHP GmbH
-"""Executable gate for the two committed geometry schemas (pins + black-box padmap).
+"""Executable gate for the committed geometry schemas (pins, black-box padmap, io_pads).
 
 This is NOT part of the .chiplet reader-parity corpus (run_conformance.py /
-manifest.yaml). It proves the two JSON Schemas are well-formed, that the canonical
+manifest.yaml). It proves those JSON Schemas are well-formed, that the canonical
 example instances validate, that every documented negative is rejected, and that the
-two artifacts never cross-parse (a pins.json is not a padmap and vice versa).
+artifacts never cross-parse (a pins.json is not a padmap and vice versa).
+
+Section (e) covers the rest of the directory. Deep coverage is per-artifact and only
+three files have it, but well-formedness is not a matter of taste, so EVERY committed
+schema is held to it. Without that, a file could sit in ``schemas/`` for months
+declaring a dialect no validator accepts and nothing would say so: a governed-looking
+directory whose governance reaches a minority of its contents is worse than an
+ungoverned one, because readers trust it.
 
 jsonschema is a HARD import here on purpose: a gate that silently skips itself when
 its validator is missing is not a gate. The validator class is chosen by
-``validator_for`` off each file's own ``$schema`` (draft-07), never hardcoded.
+``validator_for`` off each file's own ``$schema``, never hardcoded: the directory is
+deliberately mixed, some files declaring draft-07 and some 2020-12, and which spelling
+each one uses is a live question (DEEP_REVIEW_CLOSURE SEAM-8b), not something this
+gate should pre-empt by assuming a dialect.
 """
 import copy
 import json
@@ -241,3 +251,46 @@ def test_io_pads_example_fails_pins_and_padmap_schemas():
 def test_pins_and_padmap_examples_fail_the_io_pads_schema():
     assert not _valid(IO_PADS_SCHEMA, PINS_EXAMPLE)
     assert not _valid(IO_PADS_SCHEMA, PADMAP_EXAMPLE)
+
+
+# --- (e) every committed schema is well-formed under its own dialect -------
+def _committed_schemas():
+    """Every ``*.schema.json`` in ``schemas/``, discovered, never hand-listed.
+
+    A hand-list is how the previous coverage gap happened: three files were named
+    at the top of this module and the other six joined the directory unnoticed.
+    """
+    return sorted(SCHEMAS.glob("*.schema.json"))
+
+
+def test_the_directory_is_not_empty():
+    # Guards the glob itself: a typo'd path would make every test below vacuous.
+    assert len(_committed_schemas()) >= 7
+
+
+def test_every_committed_schema_declares_a_dialect():
+    # validator_for falls back to the latest draft when $schema is absent, so an
+    # undeclared file is silently validated against a dialect its author never
+    # chose. Declaring it is the cheapest thing a schema can do.
+    undeclared = [p.name for p in _committed_schemas()
+                  if "$schema" not in json.loads(p.read_text(encoding="utf-8"))]
+    assert undeclared == []
+
+
+def test_every_committed_schema_is_wellformed():
+    for path in _committed_schemas():
+        schema = _load(path)
+        cls = validator_for(schema)
+        cls.check_schema(schema)  # SchemaError names the offending file
+
+
+def test_non_schema_files_are_not_schemas_in_disguise():
+    # chiplet_pads.json is a data vocabulary that lives here on purpose. The
+    # naming carries that distinction, so nothing may claim to be a schema
+    # without the name that puts it under the checks above.
+    for path in sorted(SCHEMAS.glob("*.json")):
+        if path.name.endswith(".schema.json"):
+            continue
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        assert "$schema" not in doc, path.name
+        assert "properties" not in doc, path.name
