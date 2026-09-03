@@ -763,16 +763,27 @@ changes nothing); `flow:value` is NOT, because the expression requires whitespac
 between the colon and anything after it; and `---`, `...`, a `#` comment, an empty
 line, a bare `:` and a key containing a space are not key lines.
 
-### Quoted keys at column zero are refused
+### Top-level keys are written bare
 
 `"flow":` and `'flow':` at column zero are valid YAML and are NOT key lines under
 this grammar. A splitter therefore attaches such a block to the PRECEDING one,
 where it is owned by whoever owns that block and is dropped by the next re-export
-that regenerates it. A host that splits a document into top-level blocks MUST
-refuse a document carrying a quoted key at column zero rather than mis-attribute
-it; this ownership guard is also why validation rule 7 forbids fixing scalar
-quoting with a document-wide emitter switch that quotes keys too. Keys stay bare,
-values are quoted.
+that regenerates it.
+
+So a WRITER MUST emit top-level keys bare. This is the same rule as validation
+rule 7, seen from the other side: rule 7 forbids fixing scalar quoting with a
+document-wide emitter switch precisely because such a switch quotes keys too, and
+this is what a quoted key costs. Keys stay bare, values are quoted.
+
+A READER is bound differently. A quoted key at column zero makes a document NON
+SPLITTABLE, not invalid: it is well-formed YAML, the schema has nothing to say
+about how a key was spelled, and a reader that rejected it would be stricter than
+this specification. A host that splits MUST refuse to SPLIT such a document
+rather than mis-attribute the block, and MUST NOT write it back (see below).
+
+The writer rule is therefore a countermeasure, not a prohibition: it keeps a
+document from reaching the shape in which the ownership guard cannot answer, and
+nothing in the schema forbids that shape.
 
 ### Block extent
 
@@ -804,13 +815,46 @@ what makes flow rule 4 implementable:
 - C++: `ChipletDocument::flow_yaml` is the source slice of the `flow` block, key
   line included.
 
+### A block the grammar cannot delimit
+
+A `flow` block can be spelled so that YAML sees it and this grammar does not: a
+flow-style document (`{format_version: "1.0", ..., flow: {...}}`), a key line
+written `flow :`, or any file that is not splittable at all because it carries a
+quoted key at column zero. The block then has no slice, and rule 4's byte for
+byte is not a thing that can be done to it.
+
+Three obligations follow, and they are deliberately not the same obligation:
+
+- A host MUST still LOAD the document. Flow rule 1 already says a reader that
+  cannot parse the block must not reject the file; not being able to *delimit* it
+  is a weaker failure than not being able to parse it, so it cannot justify a
+  stronger response. What is lost is a write guarantee, not the document.
+- A host MUST NOT write the document back without re-authoring that block. The
+  bytes were never captured, so writing is a choice between dropping the block
+  and inventing it; a host that cannot make that choice honestly refuses to save
+  and says why. Re-authoring the flow through the host is the way forward: then
+  the host owns the block and rule 4 no longer applies to it.
+- A host MUST NOT emit a re-serialisation of the parsed node in the place the
+  source text belongs. A node dump re-quotes scalars and drops comments and is
+  indistinguishable, in the file, from the source it replaced. This is the
+  failure mode the raw-block accessors exist to prevent, and it is worse than
+  refusing because nothing downstream can detect it.
+
+The C++ reference records which of the three states a document is in
+(`ChipletDocument::flow_source`: `Absent`, `Slice`, `NotDelimitable`), keeps
+`flow_yaml` empty in the third, and throws from `dumps()`. A writer with no
+source slice at all, such as the Python reference's canonical `dumps()`, never
+promised rule 4 in the first place and is not bound by this.
+
 ### One oracle
 
 Every implementation is measured against
 [`conformance/fixtures/top_level_blocks_cases.json`](../conformance/fixtures/top_level_blocks_cases.json),
 never against another implementation: accept and reject key lines, documents with
-the exact expected slice per top-level key, and the documents that must be
-refused. Add a case to that file, never to a consumer.
+the exact expected slice per top-level key, the documents a splitter must refuse
+to split, and the documents whose `flow` block has no slice. The three verdicts
+are recorded separately, because a document can be loadable and not splittable,
+and splittable and not writable. Add a case to that file, never to a consumer.
 
 ## Data Types and Constraints
 
@@ -918,9 +962,9 @@ ones that need a reader, not a schema.
    `Emitter::SetStringFormat(DoubleQuoted)` does) emits `"format_version":` at
    column zero, a spelling that is valid YAML but that the line-level ownership
    grammar of the merge tooling does not recognise as a key (see [Top-level block
-   grammar](#top-level-block-grammar-normative), which refuses such a document
-   outright), so a writer that fixed its scalars that way would defeat the
-   block-ownership guard on the next merge.
+   grammar](#top-level-block-grammar-normative): the document still loads, but it
+   can no longer be split or written back), so a writer that fixed its scalars
+   that way would defeat the block-ownership guard on the next merge.
    Keys stay bare; values are quoted. The examples in this specification and in
    `examples/` quote every such field, because writers are copied from examples.
 

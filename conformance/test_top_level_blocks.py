@@ -32,6 +32,7 @@ ACCEPT = CASES["key_lines"]["accept"]
 REJECT = CASES["key_lines"]["reject"]
 SPLITS = CASES["splits"]
 REFUSE = CASES["refuse"]
+NOT_DELIMITABLE = CASES["not_delimitable"]
 
 #: A quoted key at column zero, in the spelling the refuse cases must carry.
 _QUOTED_KEY = re.compile(r'^(?:"[^"]*"|\'[^\']*\'):(?:\s.*)?\Z')
@@ -81,8 +82,24 @@ def test_oracle_split_case_is_wellformed(case):
 @pytest.mark.parametrize("case", REFUSE, ids=lambda c: c["name"])
 def test_oracle_refuse_case_is_wellformed(case):
     assert case["doc"] and case["reason"]
+    assert isinstance(case["loads"], bool)
     quoted = [ln for ln in case["doc"].split("\n") if _QUOTED_KEY.match(ln)]
     assert quoted, "a refuse case must carry a quoted key at column zero"
+    # "writes" is a statement about a source-slice writer and only means anything
+    # for a document a reader can hold in the first place.
+    assert case["loads"] is True
+    assert isinstance(case["writes"], bool)
+
+
+@pytest.mark.parametrize("case", NOT_DELIMITABLE, ids=lambda c: c["name"])
+def test_oracle_not_delimitable_case_is_wellformed(case):
+    assert case["doc"] and case["reason"]
+    # The section exists for documents that carry a flow node the grammar cannot
+    # delimit, so a case without a flow node is not one of them...
+    assert "flow" in case["doc"]
+    # ...and neither is one whose flow IS a key line, which would have a slice.
+    assert not any(cfio.top_level_key(line) == "flow"
+                   for line in case["doc"].split("\n"))
 
 
 # --- (b) the Python reference against the oracle ---------------------------
@@ -110,16 +127,37 @@ def test_named_block_matches_the_oracle(case):
 
 
 @pytest.mark.parametrize("case", REFUSE, ids=lambda c: c["name"])
-def test_quoted_key_at_column_zero_is_refused(case):
+def test_splitting_is_refused(case):
     with pytest.raises(cfio.ChipletFormatError):
         cfio.top_level_blocks(case["doc"])
     with pytest.raises(cfio.ChipletFormatError):
         cfio.top_level_block(case["doc"], "flow")
 
 
-def test_loads_does_not_split_and_is_therefore_not_bound_by_the_guard():
-    # The ownership guard binds a host that SPLITS. loads() parses YAML, where a
-    # quoted key is an ordinary key, so it keeps reading these documents; the
-    # asymmetry is deliberate and is the reason the guard lives on the splitter.
-    doc = REFUSE[0]["doc"]
-    assert cfio.loads(doc)["assembly"]["name"] == "demo"
+@pytest.mark.parametrize("case", REFUSE, ids=lambda c: c["name"])
+def test_a_document_a_splitter_refuses_is_still_read(case):
+    # Splitting and reading are different verdicts. A quoted key at column zero
+    # is an ordinary key to YAML: the document is structurally valid, and flow
+    # rule 1 says a reader that cannot handle the flow block MUST NOT reject the
+    # file. Refusing here would make the reference reader stricter than the spec
+    # it defines, over a question (who owns which bytes) that only a host writing
+    # the file back has to answer.
+    if not case["loads"]:
+        pytest.skip("this document is ill-formed and refused at load")
+    assert cfio.loads(case["doc"])["assembly"]["name"]
+
+
+@pytest.mark.parametrize("case", NOT_DELIMITABLE, ids=lambda c: c["name"])
+def test_a_flow_block_the_grammar_cannot_delimit_still_loads(case):
+    # Same rule, the other spelling: the flow node is there, YAML reads it, and
+    # the grammar has no slice for it. Loading is unaffected.
+    assert cfio.loads(case["doc"])["flow"] is not None
+
+
+@pytest.mark.parametrize("case", NOT_DELIMITABLE, ids=lambda c: c["name"])
+def test_a_flow_block_the_grammar_cannot_delimit_splits_without_a_flow_key(case):
+    # And the split succeeds; it just has no flow block to hand over. That is the
+    # signal a source-slice writer refuses on (the C++ reference: flow_source
+    # NotDelimitable, dumps() throws). This reader's dumps() re-emits from the
+    # dict and never claimed byte-exactness, so there is nothing here to refuse.
+    assert "flow" not in cfio.top_level_blocks(case["doc"])

@@ -240,6 +240,25 @@ struct Metadata {
     std::string finalizer;
 };
 
+// Where the bytes in ChipletDocument::flow_yaml came from, which is what decides
+// whether this document can be WRITTEN back.
+//
+//   Absent          no flow block, or a flow value authored in memory by this
+//                   host (it owns the bytes, so it may write them).
+//   Slice           the exact source slice the top-level block grammar
+//                   delimited: flow rule 4 is satisfiable, dumps() appends it
+//                   unchanged.
+//   NotDelimitable  the document HAS a flow node the grammar cannot delimit (a
+//                   flow-style document, a `flow :` key line, a quoted key at
+//                   column zero anywhere in the file). Reading such a document
+//                   is fine and the spec requires it: flow rule 1 says a reader
+//                   that cannot parse the block MUST NOT reject the document.
+//                   What is impossible is writing it back, so `flow_yaml` is
+//                   empty and dumps() throws rather than drop the block or emit
+//                   a node dump in its place. A host that re-authors the flow
+//                   (assigns flow_yaml) can save again.
+enum class FlowSource { Absent, Slice, NotDelimitable };
+
 // Top-level parsed document. A faithful, round-trippable view of one .chiplet
 // file. The `flow` build block is host-specific build configuration the spec
 // leaves opaque, and it is kept as the exact source text rather than as a parsed
@@ -263,7 +282,12 @@ struct ChipletDocument {
     // NOT a re-serialisation: a node dump re-quotes scalars (a source '0755'
     // comes back bare, and is then an integer to the next PyYAML reader) and
     // drops comments. dumps() writes these bytes back unchanged.
+    //
+    // Empty when `flow_source` is NotDelimitable: the block is in the document
+    // but its bytes were never captured, and inventing them is exactly what this
+    // field exists to prevent.
     std::string flow_yaml;
+    FlowSource flow_source = FlowSource::Absent;
 
     // Non-fatal reader notes (e.g. a same-major higher-minor format_version).
     // Per-document, so there is no global state and a GUI host can surface them

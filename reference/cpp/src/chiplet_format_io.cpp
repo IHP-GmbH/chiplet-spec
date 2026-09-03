@@ -44,8 +44,10 @@ const std::regex& key_line_re() {
 }
 
 // A QUOTED key at column zero. Valid YAML, not a key line, and the reason a
-// splitting host refuses the document instead of attaching the block to the
-// preceding key, whose owner regenerates it away on the next export.
+// splitting host refuses to SPLIT the document instead of attaching the block to
+// the preceding key, whose owner regenerates it away on the next export. The
+// document still loads: the spelling is structurally fine, it is the text-level
+// ownership question that has no answer.
 const std::regex& quoted_key_line_re() {
     static const std::regex re(
         R"RX((?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'):(?:\s[^\n]*)?)RX");
@@ -72,11 +74,20 @@ std::string top_level_key(const std::string& content) {
 // exact source text: key line included, original line endings, no
 // trailing-newline normalisation, nothing stripped. Lines before the first key
 // line are the PREAMBLE, keyed by the empty string, and are present only when
-// there are any. A repeated key concatenates its runs onto the first occurrence,
-// which keeps its position, so no text is ever dropped. Throws on a quoted key
-// at column zero (the ownership guard).
+// there are any.
+//
+// Two outcomes that are not a successful split, and they are different things:
+//
+//   * a QUOTED key at column zero makes the document NOT SPLITTABLE. It is valid
+//     YAML and a reader must still load it (flow rule 1), so this is reported
+//     through `not_splittable` rather than thrown: the blocks returned alongside
+//     it mis-attribute that key's body to the preceding block and no caller may
+//     use them.
+//   * a REPEATED top-level key makes the document ill-formed, and that one
+//     throws. PyYAML resolves such a key to the last value and yaml-cpp to the
+//     first, so no reading of it is conforming and there is nothing to hand back.
 std::vector<std::pair<std::string, std::string>> split_top_level_blocks(
-    const std::string& text) {
+    const std::string& text, std::string* not_splittable = nullptr) {
     std::vector<std::pair<std::string, std::string>> blocks;
     blocks.emplace_back(std::string(), std::string());  // the preamble
     std::size_t current = 0;
@@ -100,15 +111,16 @@ std::vector<std::pair<std::string, std::string>> split_top_level_blocks(
             if (current == blocks.size()) {
                 blocks.emplace_back(key, std::string());
             }
-        } else if (std::regex_match(content, quoted_key_line_re())) {
-            throw ChipletFormatError(
+        } else if (std::regex_match(content, quoted_key_line_re()) &&
+                   not_splittable != nullptr && not_splittable->empty()) {
+            *not_splittable =
                 "line " + std::to_string(number) + ": quoted key at column zero (" +
                 content +
                 "). A quoted key is valid YAML but does not start a top-level "
                 "block, so this document cannot be split without attaching the "
                 "block to the preceding key, where its owner drops it on the next "
                 "re-export. Emit bare keys and quote values "
-                "(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).");
+                "(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).";
         }
         blocks[current].second += line;
         start = end;
@@ -517,13 +529,15 @@ ChipletDocument loads(const std::string& text, const LoadOptions& opts) {
     }
 
     // The grammar runs over the SOURCE TEXT, which is the only place the exact
-    // bytes of a block exist. It also refuses a quoted key at column zero here,
-    // before anything is read out of the document: that spelling cannot be split
-    // without giving one key's block to another. The Python reference's loads()
-    // parses YAML rather than splitting and is not bound by the guard; this
-    // reader splits, so it is.
+    // bytes of a block exist. A quoted key at column zero leaves the document
+    // NOT SPLITTABLE (`not_splittable` explains why and the blocks must not be
+    // used); the document itself is valid and is still read, because flow rule 1
+    // says a reader that cannot handle the flow block must not reject the file.
+    // What that costs is the ability to write it back, and that is where it is
+    // charged: see dumps().
+    std::string not_splittable;
     const std::vector<std::pair<std::string, std::string>> blocks =
-        split_top_level_blocks(text);
+        split_top_level_blocks(text, &not_splittable);
 
     ChipletDocument doc;
     doc.format_version = as_or<std::string>(root, "format_version", "");
@@ -617,25 +631,27 @@ ChipletDocument loads(const std::string& text, const LoadOptions& opts) {
     if (root["flow"]) {
         doc.has_flow = true;
         const std::string* slice = nullptr;
-        for (const auto& block : blocks) {
-            if (block.first == "flow") {
-                slice = &block.second;
-                break;
+        if (not_splittable.empty()) {
+            for (const auto& block : blocks) {
+                if (block.first == "flow") {
+                    slice = &block.second;
+                    break;
+                }
             }
         }
         if (slice == nullptr) {
-            // The document has a flow block that the grammar cannot see: not a
+            // The document has a flow block whose bytes the grammar cannot
+            // delimit: the file is not splittable at all, or the block is not a
             // bare `flow:` at column zero (a flow-style document, or `flow :`).
-            // Every host that splits would lose it on the next re-export, so it
-            // is refused rather than dropped quietly or handed over as a dump,
-            // which is the re-serialisation this field stopped being.
-            throw ChipletFormatError(
-                "the flow block is not written as a bare `flow:` key at column "
-                "zero, so the top-level block grammar cannot delimit it and its "
-                "bytes cannot be preserved (docs/CHIPLET_FORMAT_SPEC.md, "
-                "top-level block grammar)");
+            // The document is still valid and still loads, per flow rule 1. What
+            // it loses is the write path: flow_yaml stays empty, the source is
+            // recorded as NotDelimitable, and dumps() refuses rather than drop
+            // the block or emit a node dump as if it were the source.
+            doc.flow_source = FlowSource::NotDelimitable;
+        } else {
+            doc.flow_yaml = *slice;
+            doc.flow_source = FlowSource::Slice;
         }
-        doc.flow_yaml = *slice;
     }
 
     return doc;
@@ -652,6 +668,23 @@ ChipletDocument load(const std::string& path, const LoadOptions& opts) {
 }
 
 std::string dumps(const ChipletDocument& doc, const DumpOptions& opts) {
+    // Not validation, and so not under opts.validate: this document simply
+    // cannot be written. It was read from a file whose flow block the top-level
+    // block grammar could not delimit, so the block's bytes were never captured.
+    // A writer has three options here and two of them are silent lies: drop the
+    // block, or emit a node dump in the place the source text belongs. It takes
+    // the third and says so. A host that re-authors the flow (assigns flow_yaml)
+    // may save normally.
+    if (doc.has_flow && doc.flow_yaml.empty() &&
+        doc.flow_source == FlowSource::NotDelimitable) {
+        throw ChipletFormatError(
+            "this document carries a flow block the top-level block grammar "
+            "could not delimit (it is not written as a bare `flow:` key line at "
+            "column zero, or the file has a quoted key at column zero), so its "
+            "source bytes were never captured and flow rule 4 cannot be honoured "
+            "on write. Re-author the flow through this host before saving "
+            "(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar)");
+    }
     if (opts.validate) {
         // Writing an intermediate (finalize_required) document is legitimate.
         validate(doc, /*allow_intermediate=*/true);

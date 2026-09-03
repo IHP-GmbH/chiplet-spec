@@ -33,6 +33,22 @@ void check(bool cond, const std::string& what) {
     }
 }
 
+// Run `fn`; pass the check iff it does NOT throw.
+template <typename Fn>
+void check_no_throw(Fn fn, const std::string& what) {
+    ++g_checks;
+    try {
+        fn();
+        return;
+    } catch (const cfio::ChipletFormatError& e) {
+        std::cerr << "  FAIL (unexpected throw): " << what << ": " << e.what()
+                  << "\n";
+    } catch (...) {
+        std::cerr << "  FAIL (unexpected throw): " << what << "\n";
+    }
+    ++g_failures;
+}
+
 // Run `fn`; pass the check iff it throws ChipletFormatError.
 template <typename Fn>
 void check_throws(Fn fn, const std::string& what) {
@@ -199,6 +215,8 @@ void test_flow_block_is_the_exact_source_slice() {
         ++cases;
         cfio::ChipletDocument parsed = cfio::loads(c["doc"].as<std::string>());
         check(parsed.has_flow, name + ": flow block detected");
+        check(parsed.flow_source == cfio::FlowSource::Slice,
+              name + ": the flow bytes are recorded as a source slice");
         check(parsed.flow_yaml == expected,
               name + ": flow_yaml is the source slice, byte for byte");
     }
@@ -225,15 +243,34 @@ void test_flow_block_is_re_emitted_byte_for_byte() {
 
 // A quoted key at column zero is valid YAML and is NOT a top-level key line, so
 // a splitter would hand the block to the preceding key, whose owner regenerates
-// it away on the next export. This reader splits, so it refuses the document.
-void test_quoted_key_at_column_zero_refused() {
+// it away on the next export. That makes the document NOT SPLITTABLE, which is
+// not the same as invalid: flow rule 1 says a reader must not reject a document
+// over a block it cannot handle, so it LOADS. The guarantee that actually breaks
+// is the write one, and that is where it is charged.
+void test_quoted_key_at_column_zero_loads_and_may_refuse_to_write() {
     const YAML::Node& oracle = block_oracle();
     int cases = 0;
     for (const auto& c : oracle["refuse"]) {
-        ++cases;
+        const std::string name = c["name"].as<std::string>();
         const std::string doc = c["doc"].as<std::string>();
-        check_throws([&] { cfio::loads(doc); },
-                     c["name"].as<std::string>() + ": refused");
+        if (!c["loads"].as<bool>()) {
+            check_throws([&] { cfio::loads(doc); }, name + ": refused at load");
+            continue;
+        }
+        ++cases;
+        check_no_throw([&] { cfio::loads(doc); }, name + ": still loads");
+        cfio::ChipletDocument parsed = cfio::loads(doc);
+        check(!parsed.assembly.name.empty(), name + ": and is read normally");
+        if (c["writes"].as<bool>()) {
+            check_no_throw([&] { cfio::dumps(parsed); },
+                           name + ": no flow block, so it writes back");
+        } else {
+            check(parsed.flow_source == cfio::FlowSource::NotDelimitable,
+                  name + ": its flow block has no source slice");
+            check(parsed.flow_yaml.empty(), name + ": and no invented bytes");
+            check_throws([&] { cfio::dumps(parsed); },
+                         name + ": refuses to write the flow block back");
+        }
     }
     check(cases >= 3, "the oracle still carries the refuse cases");
 }
@@ -241,23 +278,38 @@ void test_quoted_key_at_column_zero_refused() {
 // A flow block the grammar cannot delimit: a flow-style document, or a key line
 // spelled `flow :`, which YAML reads as the key `flow` and the grammar does not
 // see at all. Either way the block has no slice, so re-emitting it byte for byte
-// is impossible; the reader says so instead of handing back an empty field that
-// dumps() would drop, or a dump that looks like the source text and is not.
-void test_flow_block_the_grammar_cannot_delimit_is_refused() {
-    check_throws([&] {
-        cfio::loads("{format_version: \"1.0\", assembly: {name: a}, "
-                    "flow: {steps: []}}\n");
-    }, "flow-style document refused");
-    check_throws([&] {
-        cfio::loads("format_version: \"1.0\"\nassembly:\n  name: a\n"
-                    "flow :\n  steps: []\n");
-    }, "`flow :` refused");
+// is impossible. The document still LOADS (flow rule 1), the missing slice is
+// recorded rather than papered over, and the refusal lands on dumps(): the two
+// alternatives there are dropping the block and emitting a node dump in the
+// place the source text belongs, and both are silent lies.
+void test_flow_block_the_grammar_cannot_delimit_loads_but_does_not_write() {
+    const YAML::Node& oracle = block_oracle();
+    int cases = 0;
+    for (const auto& c : oracle["not_delimitable"]) {
+        ++cases;
+        const std::string name = c["name"].as<std::string>();
+        const std::string doc = c["doc"].as<std::string>();
+        check_no_throw([&] { cfio::loads(doc); }, name + ": loads");
+        cfio::ChipletDocument parsed = cfio::loads(doc);
+        check(parsed.has_flow, name + ": the flow node is seen");
+        check(parsed.flow_source == cfio::FlowSource::NotDelimitable,
+              name + ": recorded as having no source slice");
+        check(parsed.flow_yaml.empty(), name + ": no invented bytes");
+        check_throws([&] { cfio::dumps(parsed); },
+                     name + ": refuses to write it back");
+    }
+    check(cases >= 2, "the oracle still carries the not_delimitable cases");
+
     // Without a flow block, both spellings of the same document are fine: the
     // grammar only has to delimit what is there.
     cfio::ChipletDocument parsed =
         cfio::loads("{format_version: \"1.0\", assembly: {name: a}}\n");
     check(!parsed.has_flow && parsed.assembly.name == "a",
           "a flow-style document without a flow block still loads");
+    check(parsed.flow_source == cfio::FlowSource::Absent,
+          "and reports no flow source at all");
+    check_no_throw([&] { cfio::dumps(parsed); },
+                   "and writes back without complaint");
 }
 
 // A document assembled in memory, not read from a file, may still carry the
@@ -521,8 +573,8 @@ int main() {
     test_unknown_interface_type_rejected();
     test_flow_block_is_the_exact_source_slice();
     test_flow_block_is_re_emitted_byte_for_byte();
-    test_quoted_key_at_column_zero_refused();
-    test_flow_block_the_grammar_cannot_delimit_is_refused();
+    test_quoted_key_at_column_zero_loads_and_may_refuse_to_write();
+    test_flow_block_the_grammar_cannot_delimit_loads_but_does_not_write();
     test_hand_built_flow_value_without_a_key_line_still_emits();
     test_interconnect_adapter_and_technology();
     test_technology_stackup_roundtrip();

@@ -382,6 +382,14 @@ def dumps(data: Dict[str, Any], *, validate: bool = True,
     ``format_version`` describes the bytes written, so a same-major higher-minor
     input is preserved (and, when validating, re-warns), never silently stamped
     down. See :func:`_apply_write_version`.
+
+    It writes a ``flow`` block from the parsed value, never from source bytes, so
+    it does not implement flow rule 4 and never claimed to. The corollary is that
+    it has no "the block has no slice" state to refuse on: the C++ reference,
+    which does keep the source slice, refuses to write a document whose flow
+    block the grammar could not delimit (``FlowSource::NotDelimitable``). A host
+    that needs rule 4 keeps the original text beside the parsed document and
+    writes the text; this function is not that host.
     """
     out = dict(data)
     if validate:

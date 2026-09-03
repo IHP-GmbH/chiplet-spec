@@ -86,3 +86,20 @@ fixtures:
 
   - file: v1_0_malformed_version.chiplet
     expect: refuse
+
+  # Loadable, NOT splittable. Both spellings are structurally valid documents and
+  # every reader must load them (flow rule 1: a reader that cannot handle the
+  # flow block MUST NOT reject the document). What they cost is the text-level
+  # work: the first cannot be split into top-level blocks at all, the second has
+  # a flow node the grammar cannot delimit, and a writer that preserves the
+  # block's source bytes refuses to write either back rather than drop the block
+  # or emit a re-serialisation in its place. Those properties are pinned in
+  # fixtures/top_level_blocks_cases.json; what belongs HERE is the read verdict,
+  # which is the cross-implementation parity contract.
+  - file: v1_0_quoted_key_at_column_zero.chiplet
+    expect: accept
+    version: "1.0"
+
+  - file: v1_0_flow_not_delimitable.chiplet
+    expect: accept
+    version: "1.0"
