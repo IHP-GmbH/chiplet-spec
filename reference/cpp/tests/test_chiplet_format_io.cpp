@@ -297,6 +297,18 @@ void test_flow_block_the_grammar_cannot_delimit_loads_but_does_not_write() {
         check(parsed.flow_yaml.empty(), name + ": no invented bytes");
         check_throws([&] { cfio::dumps(parsed); },
                      name + ": refuses to write it back");
+
+        // The way out the refusal names: the host re-authors the block, and now
+        // owns the bytes it is asking to have written. A refusal with no way out
+        // is a document a host can open and never save.
+        cfio::ChipletDocument reauthored = parsed;
+        reauthored.flow_yaml = "flow:\n  steps: []\n";
+        check_no_throw([&] { cfio::dumps(reauthored); },
+                       name + ": saves once the host re-authors the flow");
+        cfio::ChipletDocument reloaded = cfio::loads(cfio::dumps(reauthored));
+        check(reloaded.has_flow &&
+                  reloaded.flow_source == cfio::FlowSource::Slice,
+              name + ": and the saved file has a delimitable flow block");
     }
     check(cases >= 2, "the oracle still carries the not_delimitable cases");
 
