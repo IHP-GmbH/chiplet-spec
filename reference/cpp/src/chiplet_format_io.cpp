@@ -297,8 +297,14 @@ ConnectionStack parse_connection_stack(const std::string& id,
     return stack;
 }
 
-const std::array<const char*, 4> kKnownInterfaceTypes = {
-    "micro_bump", "copper_pillar", "tsv", "wire_bond"};
+// The closed interface-type vocabulary (spec validation rule 4). One list, four
+// places: this array, schemas/chiplet.schema.json, the spec prose and the Python
+// KNOWN_INTERFACE_TYPES; conformance/test_interface_types.py reads all four and
+// fails when one moves alone. solder_bump is the C4-class reflowed solder ball
+// (the interconnect manifest's sbump_sac305), accepted here ahead of the 1.1
+// stamp; producers emit it from 1.1.
+const std::array<const char*, 5> kKnownInterfaceTypes = {
+    "micro_bump", "copper_pillar", "tsv", "wire_bond", "solder_bump"};
 
 bool is_known_interface_type(const std::string& t) {
     for (const char* k : kKnownInterfaceTypes) {

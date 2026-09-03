@@ -185,6 +185,25 @@ void test_unknown_interface_type_rejected() {
     check_throws([&] { cfio::loads(doc); }, "unknown interface type rejected");
 }
 
+// One document per member of the closed vocabulary of validation rule 4. That
+// the four copies of the LIST agree (this reader, the schema, the spec prose,
+// the Python constant) is checked by conformance/test_interface_types.py on the
+// text; what a text comparison cannot show is that the reader actually accepts
+// each member, which is this. solder_bump is the member added by SPEC-23.
+void test_every_known_interface_type_is_accepted() {
+    for (const std::string& type : {std::string("micro_bump"),
+                                    std::string("copper_pillar"),
+                                    std::string("tsv"),
+                                    std::string("wire_bond"),
+                                    std::string("solder_bump")}) {
+        const std::string doc =
+            "format_version: \"1.0\"\nassembly:\n  name: a\n"
+            "interfaces:\n- id: i1\n  type: " + type + "\n";
+        check_no_throw([&] { cfio::loads(doc); },
+                       "interface type " + type + " accepted");
+    }
+}
+
 // The flow block is the exact source slice, which is what flow rule 4 needs and
 // what the header has always promised. The predecessor of these tests asserted
 // !flow_yaml.empty() under the label "captured verbatim", which cannot tell a
@@ -583,6 +602,7 @@ int main() {
     test_dump_roundtrips_components_order();
     test_attachment_surface_z_roundtrip();
     test_unknown_interface_type_rejected();
+    test_every_known_interface_type_is_accepted();
     test_flow_block_is_the_exact_source_slice();
     test_flow_block_is_re_emitted_byte_for_byte();
     test_quoted_key_at_column_zero_loads_and_may_refuse_to_write();

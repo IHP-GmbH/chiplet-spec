@@ -643,7 +643,10 @@ Optional top-level list of typed die-to-die / bond interfaces in the assembly.
 Each interface has a required `id` and a required `type`; the `type` is validated
 against a known vocabulary and an unknown value is rejected.
 
-**Known `type` values:** `micro_bump`, `copper_pillar`, `tsv`, `wire_bond`.
+**Known `type` values:** `micro_bump`, `copper_pillar`, `tsv`, `wire_bond`,
+`solder_bump` (the C4-class reflowed solder ball, the interconnect manifest's
+`sbump_sac305`). `solder_bump` is accepted by readers ahead of the 1.1 stamp;
+producers emit it from 1.1.
 
 ```yaml
 interfaces:
@@ -948,7 +951,7 @@ ones that need a reader, not a schema.
    fields it did not understand.
 2. `assembly.name` is required and must not be empty.
 3. Every component has a non-empty `id` and a non-empty `type`.
-4. Every `interfaces[]` entry has an `id` and a `type`, and the `type` is one of `micro_bump`, `copper_pillar`, `tsv`, `wire_bond` (an unknown type is rejected). *C++ reference only; the Python reference validator does not check the interface-type vocabulary and accepts an unknown type.*
+4. Every `interfaces[]` entry has an `id` and a `type`, and the `type` is one of `micro_bump`, `copper_pillar`, `tsv`, `wire_bond`, `solder_bump` (an unknown type is rejected). Both reference validators enforce it.
 5. Every `netlist.nets[]` entry has a `name`. *C++ reference only; the Python reference validator does not check this and accepts a nameless net.*
 6. A file whose top-level `_metadata.finalize_required` is `true` is refused unless intermediate files are explicitly allowed (it is not yet in the canonical frame; run the named `finalizer`).
 7. Quoting is document semantics, not an emitter default. A writer MUST quote EVERY

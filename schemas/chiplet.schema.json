@@ -301,8 +301,8 @@
         "id": {"type": "string", "minLength": 1, "description": "Unique interface id."},
         "type": {
           "type": "string",
-          "enum": ["micro_bump", "copper_pillar", "tsv", "wire_bond"],
-          "description": "A CLOSED vocabulary, unlike io_pads[].io_class: the spec says an unknown interface type is rejected (the C++ reference enforces it; the Python reference validator does not, so this schema is the portable statement of the rule)."
+          "enum": ["micro_bump", "copper_pillar", "tsv", "wire_bond", "solder_bump"],
+          "description": "A CLOSED vocabulary, like io_pads[].io_class: an unknown interface type is rejected, by this schema and by both reference validators (spec validation rule 4). solder_bump is the C4-class reflowed solder ball, the interconnect manifest's sbump_sac305; readers accept it ahead of the 1.1 stamp, producers emit it from 1.1. Which io_class a given type may meet is spec validation rule 8, a cross-field rule this schema cannot express."
         },
         "from": {"$ref": "#/definitions/interface_endpoint"},
         "to": {"$ref": "#/definitions/interface_endpoint"},

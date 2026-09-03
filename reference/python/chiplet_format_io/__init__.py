@@ -48,6 +48,7 @@ import yaml
 
 __all__ = [
     "SUPPORTED_FORMAT_VERSION",
+    "KNOWN_INTERFACE_TYPES",
     "__version__",
     "ChipletFormatError",
     "ContractVersionError",
@@ -79,6 +80,16 @@ SUPPORTED_FORMAT_VERSION = "1.0"
 #: that installed the package and one that vendored the file agree on the number.
 #: Bumped under the same policy as everything else (docs/VERSION_POLICY.md).
 __version__ = "1.1.0"
+
+#: The closed ``interfaces[].type`` vocabulary (spec validation rule 4). One list
+#: lives in four places -- here, ``schemas/chiplet.schema.json``, the spec prose
+#: and the C++ ``kKnownInterfaceTypes`` -- and conformance/test_interface_types.py
+#: reads all four, so a member added to one alone fails there instead of
+#: travelling. ``solder_bump`` is the C4-class reflowed solder ball (the
+#: interconnect manifest's ``sbump_sac305``): readers accept it ahead of the 1.1
+#: stamp, producers emit it from 1.1.
+KNOWN_INTERFACE_TYPES = ("micro_bump", "copper_pillar", "tsv", "wire_bond",
+                         "solder_bump")
 
 
 class ChipletFormatError(ValueError):
@@ -345,7 +356,35 @@ def _validate(data: Dict[str, Any], *, allow_intermediate: bool,
                     f"component {comp.get('id')!r} missing required 'type'"
                 )
 
+    _validate_interfaces(data.get("interfaces"))
+
     return data
+
+
+def _validate_interfaces(ifaces: Any) -> None:
+    """Validation rule 4: an id, a type, and the type is a KNOWN one.
+
+    The C++ reference has always enforced this; the Python one accepted an
+    unknown type, so a document refused by one reader loaded in the other and
+    the spec had to carry an italic exception. It does not any more.
+    """
+    if ifaces is None:
+        return
+    if not isinstance(ifaces, list):
+        raise ChipletFormatError("'interfaces' must be a list")
+    for i, iface in enumerate(ifaces):
+        if not isinstance(iface, dict):
+            raise ChipletFormatError(f"interface[{i}] must be a mapping")
+        if not iface.get("id"):
+            raise ChipletFormatError(f"interface[{i}] missing required 'id'")
+        itype = iface.get("type")
+        if not itype:
+            raise ChipletFormatError(
+                f"interface {iface['id']!r} missing required 'type'")
+        if itype not in KNOWN_INTERFACE_TYPES:
+            raise ChipletFormatError(
+                f"interface {iface['id']!r} has unknown type {itype!r}; known "
+                f"types are {', '.join(KNOWN_INTERFACE_TYPES)}")
 
 
 def validate(data: Dict[str, Any], *, allow_intermediate: bool = False,
