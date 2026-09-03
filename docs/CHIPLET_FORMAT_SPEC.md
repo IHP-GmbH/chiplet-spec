@@ -1019,18 +1019,49 @@ ones that need a reader, not a schema.
    copper_pillar interface is therefore refused on the interposer side and not seen
    on the die side.
 
+**Assembly stage (stated here, run by the hosts that hold the interconnect
+manifest; the reference validators state this rule and do NOT run it):**
+
+9. A component's interconnect method must agree with the `type` of every interface
+   that component takes part in. For each `interfaces[]` entry and each endpoint
+   whose `component` selects a stack through `connection:`, the method that id
+   resolves to in the interconnect method registry (`interconnect_methods.json`,
+   the single source of truth for the interconnect PDK) MUST declare an
+   `interface_type` equal to the interface's `type`. An inconsistent binding is
+   refused, naming the interface id, its `type`, the component id, the method id
+   and the method's `interface_type`.
+   The rule is CROSS-ARTIFACT: the answer is not in the `.chiplet`, so its owners
+   are the hosts that hold both halves. The KiCad plugin refuses to WRITE an
+   inconsistent binding at export, because the writer that creates a binding is
+   the cheapest place to refuse one; adk-tools' assembly DRC, the Mosaic loader
+   and chiplet-system validate at LOAD, so a document that arrived by another
+   route is still caught. The two reference validators (`chiplet-format-io`,
+   Python and C++) hold no manifest, so they state this rule without running it:
+   a green from a reference reader says nothing about rule 9, and
+   `conformance/fixtures/v1_0_interface_inconsistent_binding.chiplet` is the one
+   oracle every assembly-stage host parity-tests its refusal against.
+   Scope, next to the rule so a reader of the rule alone gets it: rule 9 checks
+   the BINDING (component -> method -> interface type) and nothing behind it,
+   neither the geometry of the stack nor the pads it lands on, and only for a
+   component that carries `connection:`; a component without one mounts on the
+   interposer fallback (rule 11) and there is no method to disagree with. It is
+   independent of [rule 8](#validation-rules): rule 8 relates a pad's usage class
+   to the interface type inside one document, rule 9 relates the method to the
+   interface type across two artifacts, and a document can pass either one and
+   fail the other.
+
 **Reader behavior (warnings / fallbacks, not hard errors):**
 
-9. New files SHOULD declare `anchor:` on every component; a reader defaults an absent `anchor` to `bbox_center` and warns.
-10. If `connection` is specified it SHOULD name a known interconnect method; an absent or unresolved `connection` falls back to the interposer's `attachment_surface_z` (or `dimensions.thickness` when that field is absent, for legacy files) -- see the [coordinate-frame contract](./coord_frame_contract.md), section 3.
-11. A reader MUST warn (or reject) when any `position.x` or `position.y` exceeds `1e5` um in magnitude (heuristic for un-converted absolute coordinates).
+10. New files SHOULD declare `anchor:` on every component; a reader defaults an absent `anchor` to `bbox_center` and warns.
+11. If `connection` is specified it SHOULD name a known interconnect method; an absent or unresolved `connection` falls back to the interposer's `attachment_surface_z` (or `dimensions.thickness` when that field is absent, for legacy files) -- see the [coordinate-frame contract](./coord_frame_contract.md), section 3.
+12. A reader MUST warn (or reject) when any `position.x` or `position.y` exceeds `1e5` um in magnitude (heuristic for un-converted absolute coordinates).
 
 **Consumer / tool-level (NOT enforced by the reference library, which never touches the filesystem):**
 
-12. Component `id` values are expected to be unique.
-13. Component `type` is expected to be one of the canonical values `die`, `die_array`, `interposer`, `substrate`; the reference reader accepts any non-empty string, so other values are allowed but not recommended.
-14. If `technology` is specified it should reference a defined technology id.
-15. If `layout` or `layer_properties` is specified, the referenced file should exist at the resolved path.
+13. Component `id` values are expected to be unique.
+14. Component `type` is expected to be one of the canonical values `die`, `die_array`, `interposer`, `substrate`; the reference reader accepts any non-empty string, so other values are allowed but not recommended.
+15. If `technology` is specified it should reference a defined technology id.
+16. If `layout` or `layer_properties` is specified, the referenced file should exist at the resolved path.
 
 ---
 

@@ -144,3 +144,23 @@ fixtures:
   - file: v1_0_interface_pad_mismatch.chiplet
     expect: refuse
     pad_usage_only: true
+
+  # Validation rule 9 (component connection -> method -> interfaces[].type), the
+  # cross-artifact rule. No implementation listed above runs it: the method's
+  # interface_type lives in the interconnect manifest and none of these readers
+  # holds one. So the row that binds THEM is the accept, and it is a measured
+  # fact rather than an endorsement: a reference reader has nothing to object to
+  # in this document. `assembly_stage` carries the verdict the hosts that DO hold
+  # the manifest owe (the plugin at export; adk-tools' assembly DRC, Mosaic and
+  # chiplet-system at load), so the three of them are measured against this one
+  # file instead of against each other. Nothing in this repository checks that
+  # verdict; conformance/test_interface_binding.py says exactly that.
+  - file: v1_0_interface_inconsistent_binding.chiplet
+    expect: accept
+    version: "1.0"
+    assembly_stage:
+      rule: 9
+      expect: refuse
+      why: >-
+        U1 selects cupillar_opt1, a Cu-pillar method, and takes part in link0,
+        an interface of type micro_bump.
