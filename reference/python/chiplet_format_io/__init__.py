@@ -40,6 +40,7 @@ document version, and never has to hash a copied file to find out what it has.
 """
 from __future__ import annotations
 
+import re
 import warnings
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -59,6 +60,10 @@ __all__ = [
     "dumps",
     "dump",
     "validate",
+    "PREAMBLE_KEY",
+    "top_level_key",
+    "top_level_blocks",
+    "top_level_block",
 ]
 
 #: The highest ``format_version`` this reference implementation was written for.
@@ -398,3 +403,125 @@ def dump(data: Dict[str, Any], path, *, validate: bool = True,
     """Serialize a .chiplet mapping to a file."""
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(dumps(data, validate=validate, on_warn=on_warn))
+
+
+# --- the top-level block grammar -------------------------------------------
+#
+# Flow rule 4 (docs/CHIPLET_FORMAT_SPEC.md) says a host re-emits a flow block it
+# did not author BYTE FOR BYTE. That is a statement about text, and it needs one
+# definition of where a block starts and ends, shared by every implementation:
+# the merge splitter in the KiCad plugin, this reader, and the C++ reference.
+# The definition is normative in the spec under "Top-level block grammar" and
+# every implementation is measured against
+# conformance/fixtures/top_level_blocks_cases.json, never against another
+# implementation.
+#
+# No YAML is parsed here, on purpose. A parsed node tree cannot answer the
+# question: an emitter re-quotes scalars by its own rules (a source '0755' comes
+# back bare and is an integer to the next PyYAML reader) and drops comments,
+# which in a hand-written flow carry the author's intent.
+
+#: A top-level block starts at a KEY LINE: a bare key at column zero, optionally
+#: followed by whitespace and a value or a comment. Anchored with \Z, never $:
+#: in Python $ also matches before a trailing newline, so a $-anchored copy of
+#: this expression reads a different grammar than an ECMA-262 one does (the
+#: defect adapter_id_cases.json was written for). The portable spelling of \Z is
+#: (?![\s\S]); an ECMAScript implementation writes [^\n] for the dot, which
+#: there excludes CR as well as LF.
+_KEY_LINE_RE = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:\s.*)?\Z")
+
+#: A quoted key at column zero. Valid YAML, NOT a key line, and therefore a
+#: document this module refuses to split: a splitter would attach the block to
+#: the preceding key, whose owner regenerates it away on the next export. This is
+#: the spelling a document-wide key-quoting emitter switch produces, which is why
+#: validation rule 7 forbids one.
+_QUOTED_KEY_LINE_RE = re.compile(
+    r"""^(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'):(?:\s.*)?\Z""")
+
+#: Key of the PREAMBLE bucket: the lines before the first key line (a leading
+#: ``---``, a file header comment). They belong to no top-level key.
+PREAMBLE_KEY = ""
+
+
+def _iter_lines(text: str):
+    """Yield each line of ``text`` WITH its terminator, splitting on LF only.
+
+    Not ``str.splitlines()``: that also splits on CR, VT, FF, NEL, U+2028 and
+    friends, so a document with one of those inside a quoted scalar grows a
+    top-level block that is not in the file. A line ends at LF, full stop.
+    """
+    start, n = 0, len(text)
+    while start < n:
+        nl = text.find("\n", start)
+        end = n if nl < 0 else nl + 1
+        yield text[start:end]
+        start = end
+
+
+def _content(line: str) -> str:
+    """The part of a line the grammar matches: no LF, one optional CR removed."""
+    if line.endswith("\n"):
+        line = line[:-1]
+    if line.endswith("\r"):
+        line = line[:-1]
+    return line
+
+
+def top_level_key(line_content: str) -> Optional[str]:
+    """Return the top-level key ``line_content`` opens, or ``None``.
+
+    ``line_content`` is ONE line with its terminator already removed (that is
+    what the oracle's ``key_lines`` cases carry). Deliberately strict: a value
+    with a trailing newline is not a line, and silently accepting one is the
+    ``$``-anchor defect wearing a different hat.
+    """
+    match = _KEY_LINE_RE.match(line_content)
+    return match.group(1) if match else None
+
+
+def top_level_blocks(text: str) -> Dict[str, str]:
+    """Split a .chiplet document into its top-level blocks, in document order.
+
+    Returns ``{key: exact source text}``. A block runs from its key line up to
+    but excluding the next key line, or to end of file, and the text is the
+    SOURCE BYTES: key line included, original line endings, no trailing-newline
+    normalisation, nothing stripped. Lines before the first key line land under
+    :data:`PREAMBLE_KEY`, which is present only when there are any. A repeated
+    top-level key concatenates its runs onto the first occurrence, which keeps
+    its position, so no text is ever dropped.
+
+    Raises :class:`ChipletFormatError` for a quoted key at column zero: it is not
+    a key line, so splitting would attach that block to the preceding key and
+    lose it on the next re-export. :func:`loads` parses YAML rather than
+    splitting and is not bound by that guard; this function is.
+    """
+    blocks: Dict[str, str] = {}
+    current = PREAMBLE_KEY
+    blocks[PREAMBLE_KEY] = ""
+    for number, line in enumerate(_iter_lines(text), start=1):
+        content = _content(line)
+        key = top_level_key(content)
+        if key is not None:
+            current = key
+        elif _QUOTED_KEY_LINE_RE.match(content):
+            raise ChipletFormatError(
+                f"line {number}: quoted key at column zero ({content!r}). A "
+                f"quoted key is valid YAML but does not start a top-level "
+                f"block, so this document cannot be split without attaching "
+                f"the block to the preceding key, where its owner drops it on "
+                f"the next re-export. Emit bare keys and quote values "
+                f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
+        blocks[current] = blocks.get(current, "") + line
+    if not blocks[PREAMBLE_KEY]:
+        del blocks[PREAMBLE_KEY]
+    return blocks
+
+
+def top_level_block(text: str, key: str) -> Optional[str]:
+    """Return the exact source text of one top-level block, or ``None``.
+
+    Convenience over :func:`top_level_blocks` with the same guarantees, and the
+    call flow rule 4 needs: ``top_level_block(text, "flow")`` is the block a host
+    that did not author it re-emits unchanged.
+    """
+    return top_level_blocks(text).get(key)

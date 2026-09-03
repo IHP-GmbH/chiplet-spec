@@ -14,12 +14,16 @@ The C++ side reads the same file from its own test binary.
 """
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "conformance" / "fixtures"
+
+sys.path.insert(0, str(ROOT / "reference" / "python"))
+import chiplet_format_io as cfio  # noqa: E402
 
 CASES = json.loads(
     (FIXTURES / "top_level_blocks_cases.json").read_text(encoding="utf-8"))
@@ -79,3 +83,43 @@ def test_oracle_refuse_case_is_wellformed(case):
     assert case["doc"] and case["reason"]
     quoted = [ln for ln in case["doc"].split("\n") if _QUOTED_KEY.match(ln)]
     assert quoted, "a refuse case must carry a quoted key at column zero"
+
+
+# --- (b) the Python reference against the oracle ---------------------------
+@pytest.mark.parametrize("case", ACCEPT, ids=lambda c: c["line"])
+def test_key_line_accepted(case):
+    assert cfio.top_level_key(case["line"]) == case["key"]
+
+
+@pytest.mark.parametrize("line", REJECT, ids=repr)
+def test_key_line_rejected(line):
+    assert cfio.top_level_key(line) is None
+
+
+@pytest.mark.parametrize("case", SPLITS, ids=lambda c: c["name"])
+def test_split_matches_the_oracle(case):
+    blocks = cfio.top_level_blocks(case["doc"])
+    assert list(blocks.items()) == [(b["key"], b["text"]) for b in case["blocks"]]
+
+
+@pytest.mark.parametrize("case", SPLITS, ids=lambda c: c["name"])
+def test_named_block_matches_the_oracle(case):
+    for block in case["blocks"]:
+        assert cfio.top_level_block(case["doc"], block["key"]) == block["text"]
+    assert cfio.top_level_block(case["doc"], "no_such_key") is None
+
+
+@pytest.mark.parametrize("case", REFUSE, ids=lambda c: c["name"])
+def test_quoted_key_at_column_zero_is_refused(case):
+    with pytest.raises(cfio.ChipletFormatError):
+        cfio.top_level_blocks(case["doc"])
+    with pytest.raises(cfio.ChipletFormatError):
+        cfio.top_level_block(case["doc"], "flow")
+
+
+def test_loads_does_not_split_and_is_therefore_not_bound_by_the_guard():
+    # The ownership guard binds a host that SPLITS. loads() parses YAML, where a
+    # quoted key is an ordinary key, so it keeps reading these documents; the
+    # asymmetry is deliberate and is the reason the guard lives on the splitter.
+    doc = REFUSE[0]["doc"]
+    assert cfio.loads(doc)["assembly"]["name"] == "demo"
