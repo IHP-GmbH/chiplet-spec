@@ -22,6 +22,15 @@
 # round-trip and writer purposes; only the C++ struct reader is typed-lossy
 # (no raw retention). ir's writer parity is asserted in interposer-pnr's suite.
 #
+# Rule-8 dimension (`checks_pad_usage`): whether the reader implements validation
+# rule 8, the io_class/interface-type compatibility check of the spec. It is a
+# READER rule, not a structural one, and the two reference validators run it while
+# ir does not (row open at interposer-pnr). An expectation tagged
+# `pad_usage_only: true` is therefore skipped (not failed) for a reader that does
+# not declare the dimension, exactly as `passthrough_only` and `source_text_only`
+# are. The dimension is written down here rather than left implicit so the gap is
+# visible in the parity contract instead of being invisible in a missing row.
+#
 # Source-text dimension (`reads_source_text`): whether the reader sees the BYTES
 # of the document or only a parsed node tree. It decides one thing, and only one:
 # whether the top-level block grammar (docs/CHIPLET_FORMAT_SPEC.md) is something
@@ -31,9 +40,9 @@
 # (not failed) for such a reader, the same way `passthrough_only` is skipped for a
 # typed one. Everything NOT so tagged applies to every reader, as before.
 implementations:
-  reference_python:   {class: passthrough, writes: true, reads_source_text: true}
-  interposer_pnr_ir:  {class: passthrough, writes: true, reads_source_text: false}
-  reference_cpp:      {class: typed,       writes: true, reads_source_text: true}
+  reference_python:   {class: passthrough, writes: true, reads_source_text: true,  checks_pad_usage: true}
+  interposer_pnr_ir:  {class: passthrough, writes: true, reads_source_text: false, checks_pad_usage: false}
+  reference_cpp:      {class: typed,       writes: true, reads_source_text: true,  checks_pad_usage: true}
 
 fixtures:
   - file: v1_0_baseline.chiplet
@@ -121,3 +130,17 @@ fixtures:
   - file: v1_0_repeated_top_level_key.chiplet
     expect: refuse
     source_text_only: true
+
+  # Validation rule 8 (io_class vs interfaces[].type). The pair is one case seen
+  # from both sides: the same wire_bond pad and the same copper_pillar interface,
+  # refused when the pad is on the endpoint's port_layer and accepted when it is
+  # not. The accept row binds every reader; the refuse row binds only a reader
+  # that declares checks_pad_usage, because rule 8 is a reader rule and ir has
+  # not adopted it yet.
+  - file: v1_0_interface_pad_other_layer.chiplet
+    expect: accept
+    version: "1.0"
+
+  - file: v1_0_interface_pad_mismatch.chiplet
+    expect: refuse
+    pad_usage_only: true

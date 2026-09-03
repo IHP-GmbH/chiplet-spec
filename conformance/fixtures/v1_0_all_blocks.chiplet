@@ -57,6 +57,12 @@ components:
     position: {x: 3246.156, y: 2801.000, z: 0.0}
     dimensions: {width: 6492.312, height: 5602.001, thickness: 300.0}
     attachment_surface_z: 13.83
+    # Two usage classes, one per layer, and the split is not decoration:
+    # validation rule 8 scopes an endpoint's pad set by its port_layer, so the
+    # wire-bond pads and the flip-chip landing pads of an interposer that also
+    # carries an interface endpoint on that layer have to be told apart by
+    # something. Until the explicit pad binding of SPEC-24 exists, the layer is
+    # that something.
     io_pads:
       - id: J1
         io_class: wire_bond
@@ -64,6 +70,12 @@ components:
         position: {x: 100.0, y: 100.0}
         size: {x: 80.0, y: 80.0}
         layer: TopMetal2
+      - id: B1
+        io_class: flipped_bump
+        net: VDD
+        position: {x: 1500.0, y: 2801.0}
+        size: {x: 25.0, y: 25.0}
+        layer: TopMetal1
 
   - id: U1
     type: die
@@ -105,7 +117,7 @@ interfaces:
   - id: link0
     type: micro_bump
     from: {component: U1, surface: top, port_layer: TopMetal2}
-    to:   {component: interposer, surface: top, port_layer: TopMetal2}
+    to:   {component: interposer, surface: top, port_layer: TopMetal1}
     physical: {pitch: 45.0, diameter: 25.0, height: 24.0}
   - id: bond0
     type: wire_bond

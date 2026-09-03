@@ -49,6 +49,7 @@ import yaml
 __all__ = [
     "SUPPORTED_FORMAT_VERSION",
     "KNOWN_INTERFACE_TYPES",
+    "IO_CLASS_INTERFACE_TYPES",
     "__version__",
     "ChipletFormatError",
     "ContractVersionError",
@@ -90,6 +91,17 @@ __version__ = "1.1.0"
 #: stamp, producers emit it from 1.1.
 KNOWN_INTERFACE_TYPES = ("micro_bump", "copper_pillar", "tsv", "wire_bond",
                          "solder_bump")
+
+#: Validation rule 8's table (spec, "Usage class and interface type"): which
+#: ``interfaces[].type`` a pad of a given ``io_class`` may take part in. Two
+#: closed vocabularies about one physical joint, so not every pairing exists.
+#: The same table is written in the spec and in the C++ ``kPadUsageTable``, and
+#: conformance/test_pad_usage_compatibility.py reads all three.
+IO_CLASS_INTERFACE_TYPES = {
+    "wire_bond": ("wire_bond",),
+    "flipped_bump": ("micro_bump", "copper_pillar", "solder_bump"),
+    "tsv_bump": ("tsv",),
+}
 
 
 class ChipletFormatError(ValueError):
@@ -357,6 +369,7 @@ def _validate(data: Dict[str, Any], *, allow_intermediate: bool,
                 )
 
     _validate_interfaces(data.get("interfaces"))
+    _validate_pad_usage(data.get("interfaces"), comps)
 
     return data
 
@@ -386,6 +399,56 @@ def _validate_interfaces(ifaces: Any) -> None:
                 f"interface {iface['id']!r} has unknown type {itype!r}; known "
                 f"types are {', '.join(KNOWN_INTERFACE_TYPES)}")
 
+
+
+def _validate_pad_usage(ifaces: Any, comps: Any) -> None:
+    """Validation rule 8: a pad's io_class must allow the interface's type.
+
+    Scope, and it is deliberately narrow. The document binds no pad to an
+    interface: an endpoint is ``{component, surface, port_layer}``, and only the
+    interposer carries inline ``io_pads``. So the endpoint's PAD SET is the
+    inline pads of the endpoint's component whose ``layer`` is the endpoint's
+    ``port_layer``, an empty set is vacuous, and an endpoint whose component has
+    no inline pads (a die) is not checked at all until an explicit pad binding
+    exists (SPEC-24). A pad whose io_class is outside the table is not judged
+    here either; the schema closes that vocabulary.
+    """
+    if not isinstance(ifaces, list) or not isinstance(comps, list):
+        return
+    by_id: Dict[Any, Any] = {}
+    for comp in comps:
+        if isinstance(comp, dict) and isinstance(comp.get("id"), str):
+            by_id.setdefault(comp["id"], comp)
+    for iface in ifaces:
+        if not isinstance(iface, dict):
+            continue
+        itype = iface.get("type")
+        for side in ("from", "to"):
+            endpoint = iface.get(side)
+            if not isinstance(endpoint, dict):
+                continue
+            comp = by_id.get(endpoint.get("component"))
+            if not isinstance(comp, dict):
+                continue
+            pads = comp.get("io_pads")
+            if not isinstance(pads, list):
+                continue
+            layer = endpoint.get("port_layer")
+            for pad in pads:
+                if not isinstance(pad, dict) or pad.get("layer") != layer:
+                    continue
+                io_class = pad.get("io_class")
+                if not isinstance(io_class, str):
+                    continue
+                allowed = IO_CLASS_INTERFACE_TYPES.get(io_class)
+                if allowed is None or itype in allowed:
+                    continue
+                raise ChipletFormatError(
+                    f"interface {iface.get('id')!r} of type {itype!r} meets pad "
+                    f"{pad.get('id')!r} (io_class {io_class!r}) on layer "
+                    f"{layer!r} of component {comp.get('id')!r}: io_class "
+                    f"{io_class!r} allows only {', '.join(allowed)} "
+                    f"(docs/CHIPLET_FORMAT_SPEC.md, validation rule 8)")
 
 def validate(data: Dict[str, Any], *, allow_intermediate: bool = False,
              on_warn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:

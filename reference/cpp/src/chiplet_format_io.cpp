@@ -313,6 +313,79 @@ bool is_known_interface_type(const std::string& t) {
     return false;
 }
 
+// Validation rule 8's table (spec, "Usage class and interface type"): which
+// interface types a pad of a given io_class may take part in. One row per
+// io_class, nullptr-padded because the rows are not the same length.
+// conformance/test_pad_usage_compatibility.py reads this literal, the spec table
+// and the Python IO_CLASS_INTERFACE_TYPES, so a row that moves in one place
+// alone fails there rather than travelling.
+struct PadUsageRow {
+    const char* io_class;
+    std::array<const char*, 3> allowed;
+};
+const std::array<PadUsageRow, 3> kPadUsageTable = {{
+    {"wire_bond", {"wire_bond", nullptr, nullptr}},
+    {"flipped_bump", {"micro_bump", "copper_pillar", "solder_bump"}},
+    {"tsv_bump", {"tsv", nullptr, nullptr}},
+}};
+
+const PadUsageRow* pad_usage_row(const std::string& io_class) {
+    for (const auto& row : kPadUsageTable) {
+        if (io_class == row.io_class) return &row;
+    }
+    return nullptr;
+}
+
+std::string allowed_list(const PadUsageRow& row) {
+    std::string out;
+    for (const char* t : row.allowed) {
+        if (t == nullptr) continue;
+        if (!out.empty()) out += ", ";
+        out += t;
+    }
+    return out;
+}
+
+// Rule 8, on the one endpoint the document can answer for: the one whose
+// component carries inline io_pads (today the interposer). The endpoint's pad
+// set is the inline pads on the endpoint's port_layer; an empty set is vacuous,
+// and a die endpoint carries no pads in the document at all, so it is out of
+// scope by decision until an explicit pad binding exists (SPEC-24). A pad whose
+// io_class is outside the table is not judged here; that vocabulary is closed by
+// the schema.
+void check_pad_usage(const ChipletDocument& doc) {
+    for (const auto& iface : doc.interfaces) {
+        const InterfaceEndpoint* endpoints[2] = {
+            iface.from ? &iface.from.value() : nullptr,
+            iface.to ? &iface.to.value() : nullptr};
+        for (const InterfaceEndpoint* ep : endpoints) {
+            if (ep == nullptr) continue;
+            for (const auto& comp : doc.components) {
+                if (comp.id != ep->component) continue;
+                for (const auto& pad : comp.io_pads) {
+                    if (pad.layer != ep->port_layer) continue;
+                    const PadUsageRow* row = pad_usage_row(pad.io_class);
+                    if (row == nullptr) continue;
+                    bool ok = false;
+                    for (const char* t : row->allowed) {
+                        if (t != nullptr && iface.type == t) ok = true;
+                    }
+                    if (!ok) {
+                        throw ChipletFormatError(
+                            "interface '" + iface.id + "' of type '" +
+                            iface.type + "' meets pad '" + pad.id +
+                            "' (io_class '" + pad.io_class + "') on layer '" +
+                            pad.layer + "' of component '" + comp.id +
+                            "': io_class '" + pad.io_class + "' allows only " +
+                            allowed_list(*row) +
+                            " (docs/CHIPLET_FORMAT_SPEC.md, validation rule 8)");
+                    }
+                }
+            }
+        }
+    }
+}
+
 InterfaceEndpoint parse_endpoint(const YAML::Node& node) {
     InterfaceEndpoint ep;
     ep.component = as_or<std::string>(node, "component", "");
@@ -522,6 +595,7 @@ void validate(const ChipletDocument& doc, bool allow_intermediate,
             throw ChipletFormatError("netlist net missing required field: name");
         }
     }
+    check_pad_usage(doc);
 }
 
 ChipletDocument loads(const std::string& text, const LoadOptions& opts) {
@@ -664,6 +738,11 @@ ChipletDocument loads(const std::string& text, const LoadOptions& opts) {
             doc.flow_source = FlowSource::Slice;
         }
     }
+
+    // Rule 8 is the one check that needs the WHOLE document (an interface, the
+    // component it names and that component's inline pads), so it runs here,
+    // after the parse, under the same gate as the document-level checks.
+    if (opts.validate) check_pad_usage(doc);
 
     return doc;
 }

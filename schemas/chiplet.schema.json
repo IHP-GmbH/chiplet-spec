@@ -118,7 +118,7 @@
         "type": {
           "type": "string",
           "minLength": 1,
-          "description": "Component type. The canonical values are die, die_array, interposer and substrate; deliberately NOT an enum, because the reference reader accepts any non-empty string and rejecting an unlisted type here would make the schema stricter than every reader (spec, consumer-level rule 11)."
+          "description": "Component type. The canonical values are die, die_array, interposer and substrate; deliberately NOT an enum, because the reference reader accepts any non-empty string and rejecting an unlisted type here would make the schema stricter than every reader (spec, consumer-level rule 13)."
         },
         "technology": {"type": "string", "description": "Reference to a technology id. Whether that id is defined is a consumer check."},
         "anchor": {

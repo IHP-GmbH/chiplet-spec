@@ -392,6 +392,23 @@ never by this field's name. Adding a usage class is a MINOR bump that consumers
 adopt before any producer emits it. `size` is optional; the reference C++ writer
 emits it for every pad on output.
 
+#### Usage class and interface type (normative)
+
+A pad's usage class and the type of the interface it takes part in are two
+closed vocabularies about one physical joint, so not every pairing exists. The
+table is normative and is what [validation rule 8](#validation-rules) checks:
+
+| `io_class` (usage) | allowed `interfaces[].type` |
+|---|---|
+| `wire_bond` | `wire_bond` |
+| `flipped_bump` | `micro_bump`, `copper_pillar`, `solder_bump` |
+| `tsv_bump` | `tsv` |
+
+It relates USAGE to interface type and nothing else. The interposer-side pad
+GEOMETRY class stays where it was, in the PDK (`pad_classes`), joined to a usage
+class through the interconnect method; a row here is not a licence to skip that
+join.
+
 ### cdxml_ref (proposed extension)
 
 > **Not part of the v1.0 schema.** `cdxml_ref` is a *proposed, optional*
@@ -987,18 +1004,33 @@ ones that need a reader, not a schema.
    Keys stay bare; values are quoted. The examples in this specification and in
    `examples/` quote every such field, because writers are copied from examples.
 
+8. A pad's `io_class` must allow the `type` of every interface it takes part in,
+   per the normative table under [Usage class and interface
+   type](#usage-class-and-interface-type-normative). For each interface and each of
+   its endpoints, the endpoint's PAD SET is the inline `io_pads` of the endpoint's
+   `component` whose `layer` equals the endpoint's `port_layer`; every pad in that
+   set MUST carry an `io_class` whose row allows the interface's `type`. A violation
+   is refused, naming the interface id, the pad id, the `io_class` and the `type`.
+   An empty pad set is vacuously satisfied, and a pad whose `io_class` is outside
+   the table is not judged here (the schema closes that vocabulary). Rule 8 covers
+   the endpoint whose component carries inline io_pads (today the interposer); an
+   endpoint without inline pads (a die) is not checked by this rule, by decision,
+   until an explicit pad binding exists (SPEC-24). A wire_bond pad bound through a
+   copper_pillar interface is therefore refused on the interposer side and not seen
+   on the die side.
+
 **Reader behavior (warnings / fallbacks, not hard errors):**
 
-7. New files SHOULD declare `anchor:` on every component; a reader defaults an absent `anchor` to `bbox_center` and warns.
-8. If `connection` is specified it SHOULD name a known interconnect method; an absent or unresolved `connection` falls back to the interposer's `attachment_surface_z` (or `dimensions.thickness` when that field is absent, for legacy files) -- see the [coordinate-frame contract](./coord_frame_contract.md), section 3.
-9. A reader MUST warn (or reject) when any `position.x` or `position.y` exceeds `1e5` um in magnitude (heuristic for un-converted absolute coordinates).
+9. New files SHOULD declare `anchor:` on every component; a reader defaults an absent `anchor` to `bbox_center` and warns.
+10. If `connection` is specified it SHOULD name a known interconnect method; an absent or unresolved `connection` falls back to the interposer's `attachment_surface_z` (or `dimensions.thickness` when that field is absent, for legacy files) -- see the [coordinate-frame contract](./coord_frame_contract.md), section 3.
+11. A reader MUST warn (or reject) when any `position.x` or `position.y` exceeds `1e5` um in magnitude (heuristic for un-converted absolute coordinates).
 
 **Consumer / tool-level (NOT enforced by the reference library, which never touches the filesystem):**
 
-10. Component `id` values are expected to be unique.
-11. Component `type` is expected to be one of the canonical values `die`, `die_array`, `interposer`, `substrate`; the reference reader accepts any non-empty string, so other values are allowed but not recommended.
-12. If `technology` is specified it should reference a defined technology id.
-13. If `layout` or `layer_properties` is specified, the referenced file should exist at the resolved path.
+12. Component `id` values are expected to be unique.
+13. Component `type` is expected to be one of the canonical values `die`, `die_array`, `interposer`, `substrate`; the reference reader accepts any non-empty string, so other values are allowed but not recommended.
+14. If `technology` is specified it should reference a defined technology id.
+15. If `layout` or `layer_properties` is specified, the referenced file should exist at the resolved path.
 
 ---
 

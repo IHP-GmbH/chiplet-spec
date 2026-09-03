@@ -84,12 +84,17 @@ def check_impl(name, meta, adapt, manifest, *, passthrough_only_ok):
     is_passthrough = meta.get("class") == "passthrough"
     writes = meta.get("writes", False)
     reads_source_text = meta.get("reads_source_text", False)
+    checks_pad_usage = meta.get("checks_pad_usage", False)
     for entry in manifest["fixtures"]:
         f = entry["file"]
         # A source-text expectation asks about the raw bytes (the top-level block
         # grammar). A reader handed an already-parsed mapping cannot be asked, so
         # it is skipped rather than failed; see the manifest header.
         if entry.get("source_text_only") and not reads_source_text:
+            continue
+        # Likewise for validation rule 8: a reader that has not adopted it is
+        # skipped rather than failed, and says so in the manifest.
+        if entry.get("pad_usage_only") and not checks_pad_usage:
             continue
         text = (FIXTURES / f).read_text(encoding="utf-8")
         verdict, version, data = adapt(text)
@@ -175,11 +180,14 @@ def _try_import_ir(src):
 def _check_cpp(cpp_bin, manifest):
     import subprocess
     failures = []
-    reads_source_text = manifest["implementations"]["reference_cpp"].get(
-        "reads_source_text", False)
+    cpp = manifest["implementations"]["reference_cpp"]
+    reads_source_text = cpp.get("reads_source_text", False)
+    checks_pad_usage = cpp.get("checks_pad_usage", False)
     for entry in manifest["fixtures"]:
         f = entry["file"]
         if entry.get("source_text_only") and not reads_source_text:
+            continue
+        if entry.get("pad_usage_only") and not checks_pad_usage:
             continue
         proc = subprocess.run([cpp_bin, str(FIXTURES / f)],
                               capture_output=True, text=True)

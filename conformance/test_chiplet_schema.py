@@ -82,6 +82,14 @@ DIVERGENCES = {
         "schema": True, "reader": False,
         "why": "Same as v2_0_higher_major, on the low side.",
     },
+    "v1_0_interface_pad_mismatch.chiplet": {
+        "schema": True, "reader": False,
+        "why": "A wire_bond pad on the layer a copper_pillar interface lands "
+               "on. Validation rule 8 relates io_pads[].io_class to "
+               "interfaces[].type, two fields in different blocks, which a "
+               "structural schema cannot see at once; the reader can and "
+               "refuses it. This is the divergence the fixture exists to pin.",
+    },
 }
 
 
@@ -530,8 +538,13 @@ def test_every_pinned_entry_names_a_real_corpus_file():
 
 def test_schema_valid_documents_load_with_the_reference_reader():
     # The forward direction on its own, stated plainly: a schema-valid, same-major
-    # document is loadable. (The two pinned reader-refusals are version-policy
-    # cases, filtered here by the same policy the reader applies.)
+    # document is loadable, EXCEPT where DIVERGENCES pins a deliberate semantic
+    # refusal. Two kinds of exception are pinned there and they are different: a
+    # version-policy refusal (a different major, also filtered by the major test
+    # below) and a cross-field rule the schema cannot express (rule 8). Reading
+    # the exceptions off DIVERGENCES rather than re-deriving them keeps this test
+    # and the cross-parse test above telling one story.
+    checked = 0
     for path in CORPUS:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not _valid(data):
@@ -539,4 +552,9 @@ def test_schema_valid_documents_load_with_the_reference_reader():
         if not str(data["format_version"]).startswith(
                 cfio.SUPPORTED_FORMAT_VERSION.split(".")[0] + "."):
             continue
+        pinned = DIVERGENCES.get(path.name)
+        if pinned is not None and pinned["reader"] is False:
+            continue
+        checked += 1
         assert _reader_accepts(data), path.name
+    assert checked, "no schema-valid same-major document left to check"

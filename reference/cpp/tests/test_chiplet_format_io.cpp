@@ -359,6 +359,104 @@ void test_hand_built_flow_value_without_a_key_line_still_emits() {
           "and comes back as a proper flow block, key line included");
 }
 
+// Validation rule 8: a pad's io_class must allow the type of the interface it
+// takes part in, and the pad set of an endpoint is scoped by port_layer. The
+// TABLE is compared with the spec and with the Python constant by
+// conformance/test_pad_usage_compatibility.py; what only a run can show is the
+// reader's behaviour, which is here. Documents are hand-built rather than read
+// from the corpus: a fixture is a document, not the specification.
+std::string pad_usage_doc(const std::string& io_class,
+                          const std::string& pad_layer,
+                          const std::string& iface_type,
+                          const std::string& port_layer) {
+    return "format_version: \"1.0\"\nassembly:\n  name: rule 8\n"
+           "components:\n"
+           "- id: interposer\n  type: interposer\n  io_pads:\n"
+           "  - id: P1\n    io_class: " + io_class + "\n"
+           "    position: {x: 0.0, y: 0.0}\n    layer: " + pad_layer + "\n"
+           "- id: U1\n  type: die\n"
+           "interfaces:\n- id: link0\n  type: " + iface_type + "\n"
+           "  from: {component: U1, port_layer: " + port_layer + "}\n"
+           "  to: {component: interposer, port_layer: " + port_layer + "}\n";
+}
+
+void test_pad_usage_rule_refuses_a_mismatched_pad() {
+    check_throws([] {
+        cfio::loads(pad_usage_doc("wire_bond", "TopMetal2", "copper_pillar",
+                                  "TopMetal2"));
+    }, "a wire_bond pad under a copper_pillar interface is refused");
+
+    // The same pad and the same interface, one layer apart: the endpoint's pad
+    // set is scoped by port_layer, so this one is not in it.
+    check_no_throw([] {
+        cfio::loads(pad_usage_doc("wire_bond", "Metal4", "copper_pillar",
+                                  "TopMetal2"));
+    }, "a mismatched pad on another layer is not in the pad set");
+
+    // A row of the table, positive.
+    check_no_throw([] {
+        cfio::loads(pad_usage_doc("flipped_bump", "TopMetal2", "copper_pillar",
+                                  "TopMetal2"));
+    }, "a flipped_bump pad under a copper_pillar interface is accepted");
+
+    // solder_bump is in the flipped_bump row, which is the SPEC-23 member
+    // meeting the SPEC-22 table.
+    check_no_throw([] {
+        cfio::loads(pad_usage_doc("flipped_bump", "TopMetal2", "solder_bump",
+                                  "TopMetal2"));
+    }, "a flipped_bump pad under a solder_bump interface is accepted");
+
+    // An endpoint whose component carries no inline pads (every die endpoint)
+    // is out of scope by decision, until SPEC-24 gives interfaces a pad binding.
+    check_no_throw([] {
+        cfio::loads("format_version: \"1.0\"\nassembly:\n  name: a\n"
+                    "components:\n- id: U1\n  type: die\n"
+                    "interfaces:\n- id: link0\n  type: copper_pillar\n"
+                    "  from: {component: U1, port_layer: TopMetal2}\n");
+    }, "a die endpoint carries no pads and is not checked");
+
+    // The refusal names what a designer needs to act on.
+    bool named = false;
+    try {
+        cfio::loads(pad_usage_doc("wire_bond", "TopMetal2", "copper_pillar",
+                                  "TopMetal2"));
+    } catch (const cfio::ChipletFormatError& e) {
+        const std::string what = e.what();
+        named = what.find("link0") != std::string::npos &&
+                what.find("P1") != std::string::npos &&
+                what.find("wire_bond") != std::string::npos &&
+                what.find("copper_pillar") != std::string::npos &&
+                what.find("rule 8") != std::string::npos;
+    }
+    check(named, "the rule 8 refusal names the interface, the pad, the class "
+                 "and the type");
+
+    // And the writer will not emit one either: validate() carries the rule, so a
+    // document built in memory cannot be saved into the corpus.
+    cfio::ChipletDocument doc;
+    doc.format_version = cfio::SUPPORTED_FORMAT_VERSION;
+    doc.assembly.name = "a";
+    cfio::Component interposer;
+    interposer.id = "interposer";
+    interposer.type = "interposer";
+    cfio::IOPad pad;
+    pad.id = "P1";
+    pad.io_class = "wire_bond";
+    pad.layer = "TopMetal2";
+    interposer.io_pads.push_back(pad);
+    doc.components.push_back(interposer);
+    cfio::Interface iface;
+    iface.id = "link0";
+    iface.type = "copper_pillar";
+    cfio::InterfaceEndpoint to;
+    to.component = "interposer";
+    to.port_layer = "TopMetal2";
+    iface.to = to;
+    doc.interfaces.push_back(iface);
+    check_throws([&] { cfio::dumps(doc); },
+                 "the writer refuses to emit a rule 8 violation");
+}
+
 void test_interconnect_adapter_and_technology() {
     const std::string doc =
         "format_version: \"1.0\"\nassembly:\n  name: a\n"
@@ -603,6 +701,7 @@ int main() {
     test_attachment_surface_z_roundtrip();
     test_unknown_interface_type_rejected();
     test_every_known_interface_type_is_accepted();
+    test_pad_usage_rule_refuses_a_mismatched_pad();
     test_flow_block_is_the_exact_source_slice();
     test_flow_block_is_re_emitted_byte_for_byte();
     test_quoted_key_at_column_zero_loads_and_may_refuse_to_write();
