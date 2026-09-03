@@ -48,8 +48,15 @@ under PyYAML and `1.10` under yaml-cpp, and in JSON it is the number `1.1` with
 no way back.
 
 The reference implementation is
-`chiplet_format_io.check_contract_version(value, supported, name=...)`, with
-`check_format_version` as the `.chiplet`-specific entry point. One difference,
+`chiplet_format_io.check_contract_version(value, supported, name=...)`, where
+`supported` is one `"MAJOR.MINOR"` string or a sequence of them (see [Changing
+the major](#changing-the-major)), with `check_format_version` as the
+`.chiplet`-specific entry point, reading the module's `ACCEPTED_FORMAT_VERSIONS`.
+`SUPPORTED_FORMAT_VERSION` is the version writers stamp and must be a member of
+that set, because a writer that stamps what its own reader refuses is a policy
+nobody can follow; the C++ mirror carries the same pair (`ACCEPTED_FORMAT_VERSIONS`,
+checked by a `static_assert`) and the same verdicts, and both run the shared
+verdict oracle `conformance/fixtures/version_policy_cases.json`. One difference,
 inherited rather than chosen: a `.chiplet` `format_version` is `MAJOR.MINOR` only
 (no patch component), and `schemas/chiplet.schema.json` pins it that way; the
 sidecars accept the patch component because emitters already write `"1.0.0"`.
@@ -65,6 +72,63 @@ sidecars accept the patch component because emitters already write `"1.0.0"`.
   removing a key, changing a type, changing a coordinate frame or a unit.
 - **PATCH** for anything a consumer cannot observe: wording, examples,
   a description in a schema.
+
+The dividing line, stated once because every future argument is a version of it:
+a MINOR only adds what a consumer can ignore and remain correct, and whatever a
+consumer must honour to stay correct is a MAJOR. It is a question about the
+CHANGE, not about the diff. A new optional key a reader may skip is a minor; the
+same key is a major the moment skipping it makes the reader wrong rather than
+incomplete, and a new value in a closed vocabulary is a minor precisely because
+a consumer that does not know the value refuses the document instead of
+misreading it.
+
+## Changing the major
+
+A MAJOR bump is the change that makes an old consumer wrong rather than
+incomplete, so it cannot ship the way a MINOR does. On the day a producer
+switches, every consumer that has not switched refuses the document. The refusal
+is correct; the flag day it creates is not necessary, and this section removes
+the flag day without weakening the refusal.
+
+**1. A consumer declares the SET of majors it accepts.** One `MAJOR.MINOR` entry
+per major, carrying the minor that consumer was written for. The single-string
+form is the one-element set, with exactly the verdicts it always had, so nothing
+changes for a consumer that accepts one major. Two entries with the same major
+are a PROGRAMMING error rather than a data error: two floors for one major have
+no verdict between them. They are refused at call time (`ValueError` in Python,
+`std::invalid_argument` in C++), not at read time on whatever document happens to
+arrive first, so the mistake surfaces on the consumer's first call. An empty set
+is refused the same way: a consumer that accepts nothing can read nothing, and
+silently refusing every document would read as bad data.
+
+**2. The verdict.** Pick the entry whose major equals the declared major.
+
+| Declared, against the accepted set | Verdict |
+|---|---|
+| No entry with that major (higher or lower) | refuse, naming EVERY accepted major |
+| Minor at or below that entry's minor | accept |
+| Same major, higher minor | accept, and warn (the channel note above) |
+| Missing or malformed | refuse |
+
+Naming every accepted major is the part that is easy to get wrong: a refusal
+that names one major while the consumer accepts two sends the producer to fix
+the wrong end of the window. `PATCH` is still parsed and ignored, on the declared
+version and on the entries alike, so `1.0` and `1.0.0` are the same floor.
+
+**3. The bump, in three steps, each shippable on its own.**
+
+1. Consumers add the new major to their set while producers still emit the old
+   one. A consumer may add a major only when the code path for that major exists:
+   "accept" is a statement about the reader, never an intention.
+2. Producers switch to the new major. Both majors are now in the field, every
+   updated consumer reads both, and the conformance corpus carries a document of
+   each major for as long as the window is open.
+3. Once every governed producer emits the new major, consumers drop the old
+   entry and the corpus drops the old document.
+
+The window has to be finite, and step 3 is what makes it so. A set that only
+grows is a reader that still understands every shape the format ever had, which
+is the state a major bump exists to leave.
 
 ## Deprecating a key
 

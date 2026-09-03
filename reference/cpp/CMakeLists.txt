@@ -55,6 +55,10 @@ if(CHIPLET_FORMAT_IO_BUILD_TESTS)
     # time, so a binary built in one checkout can be measured against another
     # checkout's oracle. A missing oracle fails the run and names the path it
     # looked for: green over tests that never ran is worse than red.
-    CHIPLET_BLOCK_ORACLE_DEFAULT="${_chiplet_spec_root}/conformance/fixtures/top_level_blocks_cases.json")
+    CHIPLET_BLOCK_ORACLE_DEFAULT="${_chiplet_spec_root}/conformance/fixtures/top_level_blocks_cases.json"
+    # The version policy's verdict oracle, on the same terms (default here,
+    # CHIPLET_VERSION_ORACLE overrides at run time, absence fails the run):
+    # the Python reference runs the same rows in conformance/test_version_policy.py.
+    CHIPLET_VERSION_ORACLE_DEFAULT="${_chiplet_spec_root}/conformance/fixtures/version_policy_cases.json")
   add_test(NAME chiplet_format_io COMMAND test_chiplet_format_io)
 endif()

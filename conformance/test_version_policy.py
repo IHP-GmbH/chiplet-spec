@@ -467,3 +467,187 @@ def test_non_escalating_host_still_warns_exactly_once():
         for _ in range(3):
             cfio.check_contract_version("1.7", "1.0", name="io_pads.json")
     assert sum(isinstance(w.message, cfio.ContractVersionWarning) for w in seen) == 1
+
+
+# --- the transition window: one oracle, both readers (SPEC-21) --------------
+#
+# conformance/fixtures/version_policy_cases.json is the shared verdict oracle.
+# The rows are run here against the Python check_contract_version and in
+# reference/cpp/tests against the C++ one, so the two references are measured
+# against the file and never against each other.
+#
+# What a green over the oracle does NOT cover (META-2): warning DELIVERY. A row
+# says a higher minor is accepted and reported; which channel carries it, how it
+# is deduplicated, and what a host running warnings-as-errors sees are covered by
+# the tests above and by nothing in the oracle. It also covers no I/O: the rows
+# are versions and verdicts, never documents.
+ORACLE = ROOT / "conformance" / "fixtures" / "version_policy_cases.json"
+ORACLE_CASES = _load(ORACLE)["cases"]
+VERDICTS = {"accept", "accept_warn", "refuse", "call_error"}
+KINDS = {"string": str, "number": (int, float), "null": type(None), "list": list}
+
+
+def _case_id(case):
+    return case["name"].replace(" ", "_").replace(",", "").replace(":", "")
+
+
+def test_the_oracle_is_wellformed():
+    # An oracle nobody checks is a place for typos to hide: a row with a verdict
+    # nobody implements, or a declared_kind that lies about the JSON type, would
+    # pass silently as "one more green row".
+    assert ORACLE_CASES, "the oracle parsed to nothing"
+    names = [c["name"] for c in ORACLE_CASES]
+    assert len(set(names)) == len(names), "two oracle rows share a name"
+    for case in ORACLE_CASES:
+        for key in ("name", "accepted", "declared", "declared_kind", "verdict",
+                    "why"):
+            assert key in case, f"{case.get('name')}: missing {key}"
+        assert case["verdict"] in VERDICTS, case["name"]
+        assert isinstance(case["accepted"], list), case["name"]
+        assert isinstance(case["declared_kind"], str), case["name"]
+        assert case["declared_kind"] in KINDS, case["name"]
+        assert isinstance(case["declared"], KINDS[case["declared_kind"]]), \
+            f"{case['name']}: declared_kind {case['declared_kind']!r} is a lie"
+        assert case["why"].strip(), case["name"]
+        if case["verdict"] in ("accept", "accept_warn"):
+            assert "normalized" in case, case["name"]
+        if case["verdict"] == "refuse" and "names_majors" in case:
+            assert case["names_majors"], case["name"]
+
+
+def test_the_oracle_covers_every_shape_the_policy_names():
+    # The coverage the brief asked for, asserted rather than eyeballed: one
+    # major and two, each of lower/equal/higher minor, a missing major, a lower
+    # major, a duplicate accepted major, a malformed value, a bare number and a
+    # patch. A row deleted from the file has to fail here, not shrink the gate.
+    by_verdict = {}
+    for case in ORACLE_CASES:
+        by_verdict.setdefault(case["verdict"], []).append(case)
+    assert VERDICTS <= set(by_verdict), "a verdict of the policy has no row"
+    one_major = [c for c in ORACLE_CASES if len(c["accepted"]) == 1]
+    two_majors = [c for c in ORACLE_CASES if len(c["accepted"]) == 2
+                  and c["verdict"] != "call_error"]
+    assert one_major and two_majors
+    for group in (one_major, two_majors):
+        verdicts = {c["verdict"] for c in group}
+        assert {"accept", "accept_warn", "refuse"} <= verdicts
+    # per-major minors, on the two-major rows: below, at and above a floor
+    normalized = {c["normalized"] for c in two_majors if "normalized" in c}
+    assert {"2.1", "2.3", "2.9"} <= normalized, \
+        "the second major is not exercised below, at and above its floor"
+    # a lower major, a missing one, and a refusal that names the whole window
+    assert any(c["declared"] == "0.9" for c in ORACLE_CASES)
+    assert any(len(c.get("names_majors", [])) == 2 for c in ORACLE_CASES)
+    assert any(c["declared_kind"] == "number" for c in ORACLE_CASES)
+    assert any(isinstance(c["declared"], str) and c["declared"].count(".") == 2
+               for c in ORACLE_CASES)
+    assert any(c["verdict"] == "call_error" and len(c["accepted"]) == 2
+               for c in ORACLE_CASES)
+
+
+@pytest.mark.parametrize("case", ORACLE_CASES, ids=_case_id)
+def test_the_python_reader_gives_the_oracle_verdict(case):
+    accepted = case["accepted"]
+    declared = case["declared"]
+    verdict = case["verdict"]
+    if verdict == "call_error":
+        # A programming error in the SET, refused at call time: ValueError and
+        # deliberately not ContractVersionError, so a consumer's typo never
+        # reads as "the artifact is bad".
+        with pytest.raises(ValueError) as excinfo:
+            cfio.check_contract_version(declared, accepted, name="io_pads.json")
+        assert not isinstance(excinfo.value, cfio.ContractVersionError), \
+            case["name"]
+        return
+    if verdict == "refuse":
+        with pytest.raises(cfio.ContractVersionError) as excinfo:
+            cfio.check_contract_version(declared, accepted, name="io_pads.json")
+        message = str(excinfo.value)
+        assert "io_pads.json" in message
+        for major in case.get("names_majors", []):
+            assert str(major) in message, f"{case['name']}: {message}"
+            assert all(spelling in message for spelling in accepted), message
+        return
+    if verdict == "accept":
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # a silent accept must stay silent
+            got = cfio.check_contract_version(declared, accepted,
+                                              name="io_pads.json")
+    else:
+        with pytest.warns(cfio.ContractVersionWarning):
+            got = cfio.check_contract_version(declared, accepted,
+                                              name="io_pads.json")
+    assert got == case["normalized"], case["name"]
+
+
+def test_the_single_string_form_is_the_one_element_set():
+    # The compatibility promise of the change: every caller that passes a bare
+    # string keeps its exact verdict, because a string IS the one-element set.
+    for case in ORACLE_CASES:
+        if len(case["accepted"]) != 1 or case["verdict"] == "call_error":
+            continue
+        one = case["accepted"][0]
+        as_set = as_str = None
+        for form in (case["accepted"], one):
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    got = ("ok", cfio.check_contract_version(
+                        case["declared"], form, name="io_pads.json"))
+            except cfio.ContractVersionError as exc:
+                got = ("refuse", str(exc))
+            if form is one:
+                as_str = got
+            else:
+                as_set = got
+        assert as_set == as_str, case["name"]
+
+
+def test_the_supported_format_version_is_an_accepted_one():
+    # The half of the constant pair a comment cannot keep: what the writer
+    # stamps has to be something this reader accepts, or the library emits
+    # documents it refuses to read back. The C++ side asserts it at compile time.
+    assert cfio.SUPPORTED_FORMAT_VERSION in cfio.ACCEPTED_FORMAT_VERSIONS
+    assert cfio.ACCEPTED_FORMAT_VERSIONS, "a reader that accepts nothing"
+    majors = [cfio._parse_version(v)[0] for v in cfio.ACCEPTED_FORMAT_VERSIONS]
+    assert len(set(majors)) == len(majors), \
+        "two entries with the same major is a programming error"
+
+
+def test_the_format_version_entry_point_uses_the_accepted_set():
+    # check_format_version reads ACCEPTED_FORMAT_VERSIONS rather than a private
+    # copy of the supported major: a transition window opened in the tuple has
+    # to change what the .chiplet entry point accepts, or the set is decoration.
+    original = cfio.ACCEPTED_FORMAT_VERSIONS
+    try:
+        with pytest.raises(cfio.ChipletFormatError) as excinfo:
+            cfio.check_format_version("2.0")
+        assert "major 1" in str(excinfo.value)
+        cfio.ACCEPTED_FORMAT_VERSIONS = ("1.0", "2.3")
+        assert cfio.check_format_version("2.0") == "2.0"
+        with pytest.raises(cfio.ChipletFormatError) as excinfo:
+            cfio.check_format_version("3.0")
+        assert "majors 1, 2" in str(excinfo.value)
+    finally:
+        cfio.ACCEPTED_FORMAT_VERSIONS = original
+    assert cfio.check_format_version("1.0") == "1.0"
+
+
+def test_the_policy_document_states_the_transition_window():
+    # The code can only be right about a rule the document actually carries. A
+    # green here says the normative text exists and says the three things a
+    # consumer has to know; it says nothing about the text being GOOD, and
+    # nothing about any consumer having adopted the set form (interconnect_pdk's
+    # reader and interposer-pnr's ir.py have rows of their own, still open).
+    policy = (ROOT / "docs" / "VERSION_POLICY.md").read_text(encoding="utf-8")
+    assert "## Changing the major" in policy
+    section = policy.split("## Changing the major", 1)[1].split("\n## ", 1)[0]
+    assert "SET of majors" in section
+    assert "naming EVERY accepted major" in section
+    for phrase in ("PROGRAMMING error", "call time"):
+        assert phrase in section, phrase
+    for step in ("Consumers add the new major", "Producers switch to the new",
+                 "consumers drop the old"):
+        assert step in section, step
+    assert "a MINOR only adds what a consumer can ignore and remain correct" \
+        in policy

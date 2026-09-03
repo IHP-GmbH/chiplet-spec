@@ -28,6 +28,7 @@
 #ifndef CHIPLET_FORMAT_IO_HPP
 #define CHIPLET_FORMAT_IO_HPP
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <stdexcept>
@@ -37,11 +38,38 @@
 
 namespace chiplet_format_io {
 
-// The highest format_version this reference implementation was written for. The
-// on-disk baseline stays additive-stable at "1.0"; readers are tolerant of a
-// same-major higher minor (see check_format_version). Bump together with
-// docs/CHIPLET_FORMAT_SPEC.md and the Python reference library.
+// The format_version this reference implementation WRITES, and the entry of
+// ACCEPTED_FORMAT_VERSIONS for the major it writes. The on-disk baseline stays
+// additive-stable at "1.0"; readers are tolerant of a same-major higher minor
+// (see check_format_version). Bump together with docs/CHIPLET_FORMAT_SPEC.md and
+// the Python reference library.
 inline constexpr const char* SUPPORTED_FORMAT_VERSION = "1.0";
+
+// The SET of majors this reader accepts, one MAJOR.MINOR floor per major
+// (docs/VERSION_POLICY.md, "Changing the major"), mirroring the Python
+// ACCEPTED_FORMAT_VERSIONS. One entry is the ordinary state; a second appears
+// only while a major transition is open, and it is a promise that the code path
+// for that major exists here. The static_assert below is the half of the rule a
+// comment cannot keep: what this reader writes must be something it can read.
+inline constexpr std::array<const char*, 1> ACCEPTED_FORMAT_VERSIONS{{"1.0"}};
+
+namespace detail {
+constexpr bool same_text(const char* a, const char* b) {
+    while (*a != '\0' && *a == *b) { ++a; ++b; }
+    return *a == *b;
+}
+constexpr bool is_accepted(const char* v) {
+    for (const char* entry : ACCEPTED_FORMAT_VERSIONS) {
+        if (same_text(entry, v)) return true;
+    }
+    return false;
+}
+}  // namespace detail
+
+static_assert(detail::is_accepted(SUPPORTED_FORMAT_VERSION),
+              "SUPPORTED_FORMAT_VERSION must be one of "
+              "ACCEPTED_FORMAT_VERSIONS: a writer that stamps a version its own "
+              "reader refuses is a version policy nobody can follow");
 
 // The release of THIS reference implementation, mirroring the Python library's
 // chiplet_format_io.__version__. Distinct from SUPPORTED_FORMAT_VERSION, which
@@ -52,12 +80,32 @@ inline constexpr const char* SUPPORTED_FORMAT_VERSION = "1.0";
 inline constexpr const char* READER_RELEASE = "1.1.0";
 
 // Apply the tolerant format_version policy (parity-bound to the Python
-// check_format_version): missing/malformed or a different major throws
-// ChipletFormatError; a same-major minor <= supported is accepted silently; a
-// same-major higher minor is accepted and, when on_warn is set, reported through
-// it (never stderr, never a throw). Returns the normalized "MAJOR.MINOR".
+// check_format_version): malformed, or a major outside ACCEPTED_FORMAT_VERSIONS
+// (higher OR lower), throws ChipletFormatError and the refusal names every
+// accepted major; an accepted major with a minor at or below that major's floor
+// is accepted silently; an accepted major with a higher minor is accepted and,
+// when on_warn is set, reported through it (never stderr, never a throw).
+// Returns the normalized "MAJOR.MINOR".
 std::string check_format_version(
     const std::string& fv,
+    const std::function<void(const std::string&)>& on_warn = {});
+
+// The same policy applied to any governed artifact (io_pads.json, pins.json, the
+// black-box padmap, the boundary manifest, interconnect_methods.json), mirroring
+// the Python check_contract_version. Two differences from the .chiplet entry
+// point above, both inherited: `accepted` is the CALLER's set (one MAJOR.MINOR
+// floor per major it accepts, the one-element vector being the ordinary case),
+// and a MAJOR.MINOR.PATCH spelling is allowed because emitters already write
+// "1.0.0" -- the PATCH is parsed only to be discarded. `name` identifies the
+// artifact in the message. A version this consumer cannot read throws
+// ChipletFormatError; an `accepted` set that is empty, malformed, or declares
+// two floors for one major is a PROGRAMMING error and throws
+// std::invalid_argument at call time, so a typo in a consumer never reads as
+// "the file is bad". Returns the normalized "MAJOR.MINOR".
+std::string check_contract_version(
+    const std::string& value,
+    const std::vector<std::string>& accepted,
+    const std::string& name,
     const std::function<void(const std::string&)>& on_warn = {});
 
 // Raised when a .chiplet document is malformed or unsupported. Named to mirror

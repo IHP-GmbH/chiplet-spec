@@ -20,9 +20,11 @@ Typical use::
     cfio.dump(assembly, "design.chiplet")
 
 Version policy (docs/VERSION_POLICY.md). One rule governs every versioned
-artifact in the format family: same major with a minor at or below the supported
-one is accepted, a same-major higher minor is accepted with a warning, a
-different major or a malformed value is refused, and PATCH is ignored.
+artifact in the format family: a consumer declares the SET of majors it accepts
+with one MAJOR.MINOR floor each (a single string is the one-element set); a
+declared version whose major is in the set is accepted when its minor is at or
+below that major's floor and accepted with a warning when it is higher; a major
+outside the set or a malformed value is refused; PATCH is ignored.
 :func:`check_format_version` applies it to a ``.chiplet``'s own
 ``format_version``; :func:`check_contract_version` applies it to any governed
 sidecar (``io_pads.json``, ``pins.json``, the black-box padmap, the boundary
@@ -42,12 +44,14 @@ from __future__ import annotations
 
 import re
 import warnings
-from typing import Any, Callable, Dict, Optional, Tuple
+from collections.abc import Sequence as _Sequence
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import yaml
 
 __all__ = [
     "SUPPORTED_FORMAT_VERSION",
+    "ACCEPTED_FORMAT_VERSIONS",
     "KNOWN_INTERFACE_TYPES",
     "IO_CLASS_INTERFACE_TYPES",
     "__version__",
@@ -68,11 +72,20 @@ __all__ = [
     "top_level_block",
 ]
 
-#: The highest ``format_version`` this reference implementation was written for.
-#: The on-disk baseline stays additive-stable at "1.0"; readers are tolerant of
-#: a same-major higher minor (see :func:`check_format_version`), so this is a
-#: single exported string constant, never re-derived from a bump.
+#: The ``format_version`` this reference implementation WRITES, and the entry of
+#: :data:`ACCEPTED_FORMAT_VERSIONS` for the major it writes. The on-disk baseline
+#: stays additive-stable at "1.0"; readers are tolerant of a same-major higher
+#: minor (see :func:`check_format_version`), so this is a single exported string
+#: constant, never re-derived from a bump.
 SUPPORTED_FORMAT_VERSION = "1.0"
+
+#: The SET of majors this reader accepts, one ``MAJOR.MINOR`` floor per major
+#: (docs/VERSION_POLICY.md, "Changing the major"). A one-element tuple is the
+#: ordinary state; a second entry appears only while a major transition is open,
+#: and it is a PROMISE that the code path for that major exists, never a wish.
+#: :data:`SUPPORTED_FORMAT_VERSION` must be a member (conformance asserts it):
+#: what this reader writes has to be something it can read back.
+ACCEPTED_FORMAT_VERSIONS = ("1.0",)
 
 #: The release of THIS reader, and the value a vendored copy carries with it.
 #: Distinct from :data:`SUPPORTED_FORMAT_VERSION`, which is about the documents:
@@ -171,6 +184,67 @@ def _parse_version(fv: Any) -> Optional[Tuple[int, int]]:
 
 _SUPPORTED_MAJOR, _SUPPORTED_MINOR = _parse_version(SUPPORTED_FORMAT_VERSION)  # type: ignore[misc]
 
+
+def _accepted_map(supported: Any, name: str,
+                  parse: Callable[[Any], Optional[Tuple[int, int]]]
+                  ) -> Dict[int, Tuple[int, str]]:
+    """Normalize a declared acceptance to ``{major: (minor floor, spelling)}``.
+
+    ``supported`` is a single ``"MAJOR.MINOR"`` string (the one-element set) or a
+    sequence of them, one per major the consumer accepts, each carrying the minor
+    it was written for. The spelling is kept so a message can quote the consumer's
+    own words back.
+
+    Two entries with the same major are a PROGRAMMING error, not a data error:
+    the consumer has declared two floors for one major and there is no verdict to
+    give. It is refused at call time with :class:`ValueError`, so it fails on the
+    consumer's first call rather than on whatever document happens to arrive; the
+    same reason a malformed ``supported`` has always been a ValueError here.
+    """
+    if isinstance(supported, str):
+        entries = [supported]
+    elif isinstance(supported, _Sequence) and not isinstance(
+            supported, (bytes, bytearray)):
+        entries = list(supported)
+    else:
+        raise ValueError(
+            f"supported version {supported!r} for {name} is not a "
+            f'"MAJOR.MINOR" string or a sequence of them')
+    if not entries:
+        raise ValueError(
+            f"{name} declares no accepted version; a consumer that accepts "
+            f"nothing can read nothing")
+    out: Dict[int, Tuple[int, str]] = {}
+    for item in entries:
+        parsed = parse(item) if isinstance(item, str) else None
+        if parsed is None:
+            raise ValueError(
+                f"supported version {item!r} for {name} is not a "
+                f'"MAJOR.MINOR" string')
+        major, minor = parsed
+        if major in out:
+            raise ValueError(
+                f"{name} declares two accepted versions with major {major} "
+                f"({out[major][1]!r} and {item!r}); the set carries one "
+                f"MAJOR.MINOR floor per major")
+        out[major] = (minor, item)
+    return out
+
+
+def _accepted_phrase(accepted: Dict[int, Tuple[int, str]]) -> str:
+    """"major 1 (e.g. '1.0')", or every accepted major when there is more than one.
+
+    A refusal that named only one accepted major while the consumer accepted two
+    would send the producer to fix the wrong end of a transition window, so the
+    refusal names them all.
+    """
+    majors = sorted(accepted)
+    spellings = [accepted[m][1] for m in majors]
+    if len(majors) == 1:
+        return f"major {majors[0]} (e.g. {spellings[0]!r})"
+    return (f"majors {', '.join(str(m) for m in majors)} "
+            f"(e.g. {', '.join(repr(s) for s in spellings)})")
+
 #: Module-private warn-once state, keyed by the raw "MAJOR.MINOR" that fired.
 #: Resettable so a test suite does not leak dedup state across cases.
 _WARNED_VERSIONS: set = set()
@@ -185,11 +259,19 @@ def check_format_version(fv: Any, *,
                          on_warn: Optional[Callable[[str], None]] = None) -> str:
     """Apply the tolerant ``format_version`` policy; return the normalized version.
 
-    Policy: missing or malformed -> :class:`ChipletFormatError`; a major other
-    than the supported major (higher OR lower) -> :class:`ChipletFormatError`;
-    same major, minor <= supported -> accept silently; same major, higher minor
-    -> accept, warn once per distinct version via ``warnings.warn`` AND deliver
-    every event (undeduped) to ``on_warn`` when supplied.
+    Policy: missing or malformed -> :class:`ChipletFormatError`; a major that is
+    not in :data:`ACCEPTED_FORMAT_VERSIONS` (higher OR lower) ->
+    :class:`ChipletFormatError`, naming every accepted major; an accepted major
+    with a minor at or below that major's entry -> accept silently; an accepted
+    major with a higher minor -> accept, warn once per distinct version via
+    ``warnings.warn`` AND deliver every event (undeduped) to ``on_warn`` when
+    supplied. PATCH does not arise here: a ``.chiplet`` ``format_version`` is
+    MAJOR.MINOR only, and the schema pins it that way.
+
+    The accepted SET is what makes a major transition shippable in steps
+    (docs/VERSION_POLICY.md, "Changing the major"): while the window is open this
+    reader accepts both majors, and a second entry means the code path for that
+    major exists here.
     """
     if fv is None:
         raise ChipletFormatError("missing required key: format_version")
@@ -199,16 +281,19 @@ def check_format_version(fv: Any, *,
             f"malformed format_version {fv!r}; expected a quoted "
             f'"MAJOR.MINOR" string')
     major, minor = parsed
-    if major != _SUPPORTED_MAJOR:
+    accepted = _accepted_map(ACCEPTED_FORMAT_VERSIONS, "format_version",
+                             _parse_version)
+    if major not in accepted:
         raise ChipletFormatError(
-            f"unsupported format_version {fv!r}; this reader supports major "
-            f"{_SUPPORTED_MAJOR} (e.g. {SUPPORTED_FORMAT_VERSION!r})")
+            f"unsupported format_version {fv!r}; this reader supports "
+            f"{_accepted_phrase(accepted)}")
+    floor_minor, floor = accepted[major]
     normalized = f"{major}.{minor}"
-    if minor > _SUPPORTED_MINOR:
+    if minor > floor_minor:
         msg = (
             f"format_version {fv!r} is newer than this reader's "
-            f"{SUPPORTED_FORMAT_VERSION!r} (same major {major}); reading it as "
-            f"{SUPPORTED_FORMAT_VERSION!r} and ignoring unknown additions")
+            f"{floor!r} (same major {major}); reading it as "
+            f"{floor!r} and ignoring unknown additions")
         if on_warn is not None:
             on_warn(msg)
         if normalized not in _WARNED_VERSIONS:
@@ -256,17 +341,27 @@ def _parse_contract_version(value: Any) -> Optional[Tuple[int, int]]:
     return (numbers[0], numbers[1])
 
 
-def check_contract_version(value: Any, supported: str, *, name: str,
+def check_contract_version(value: Any,
+                           supported: Union[str, "_Sequence[str]"], *, name: str,
                            on_warn: Optional[Callable[[str], None]] = None) -> str:
     """Apply the version policy to any governed artifact; return "MAJOR.MINOR".
 
     One rule for every governed sidecar (docs/VERSION_POLICY.md), the same one
     :func:`check_format_version` applies to a ``.chiplet``: a quoted
-    ``MAJOR.MINOR`` or ``MAJOR.MINOR.PATCH`` string; same major with a minor at or
-    below ``supported`` accepted silently; same major with a HIGHER minor accepted
-    with a warning (the artifact may carry additions this consumer does not
-    understand); a different major, a missing value or a malformed one refused
-    with :class:`ContractVersionError`; PATCH ignored throughout.
+    ``MAJOR.MINOR`` or ``MAJOR.MINOR.PATCH`` string; an accepted major with a
+    minor at or below that major's floor accepted silently; an accepted major
+    with a HIGHER minor accepted with a warning (the artifact may carry additions
+    this consumer does not understand); a major the consumer does not accept, a
+    missing value or a malformed one refused with :class:`ContractVersionError`;
+    PATCH ignored throughout.
+
+    ``supported`` is the consumer's ACCEPTANCE: a single ``"MAJOR.MINOR"`` string,
+    which is the one-element set, or a sequence with one entry per major it
+    accepts, each carrying the minor it was written for. More than one entry is
+    what an open major transition looks like from the consumer's side; two
+    entries with the same major are a programming error and are refused at call
+    time with :class:`ValueError`, never at read time. A refusal names every
+    accepted major, so a producer is told the whole window and not half of it.
 
     ``name`` identifies the artifact in messages (e.g. ``"io_pads.json"``), and is
     part of the warn-once key so two sidecars never suppress each other's warning.
@@ -275,14 +370,9 @@ def check_contract_version(value: Any, supported: str, *, name: str,
 
     The point is that a consumer gates on the CONTRACT, not on byte identity with
     a vendored copy: an emitter that ships a compatible minor keeps working, and
-    an incompatible major fails loudly at the boundary instead of half-parsing.
+    an unaccepted major fails loudly at the boundary instead of half-parsing.
     """
-    sup = _parse_contract_version(supported)
-    if sup is None:
-        raise ValueError(
-            f"supported version {supported!r} for {name} is not a "
-            f'"MAJOR.MINOR" string')
-    sup_major, sup_minor = sup
+    accepted = _accepted_map(supported, name, _parse_contract_version)
     if value is None:
         raise ContractVersionError(f"{name}: missing required key: version")
     parsed = _parse_contract_version(value)
@@ -291,15 +381,16 @@ def check_contract_version(value: Any, supported: str, *, name: str,
             f"{name}: malformed version {value!r}; expected a quoted "
             f'"MAJOR.MINOR" or "MAJOR.MINOR.PATCH" string')
     major, minor = parsed
-    if major != sup_major:
+    if major not in accepted:
         raise ContractVersionError(
             f"{name}: unsupported version {value!r}; this consumer supports "
-            f"major {sup_major} (e.g. {supported!r})")
+            f"{_accepted_phrase(accepted)}")
+    floor_minor, floor = accepted[major]
     normalized = f"{major}.{minor}"
-    if minor > sup_minor:
+    if minor > floor_minor:
         msg = (
             f"{name}: version {value!r} is newer than the supported "
-            f"{supported!r} (same major {major}); reading it as {supported!r} "
+            f"{floor!r} (same major {major}); reading it as {floor!r} "
             f"and ignoring unknown additions")
         if on_warn is not None:
             on_warn(msg)

@@ -10,6 +10,7 @@
 
 #include <array>
 #include <fstream>
+#include <map>
 #include <regex>
 #include <sstream>
 #include <utility>
@@ -471,6 +472,83 @@ std::optional<std::pair<int, int>> parse_version_parts(const std::string& fv) {
     }
 }
 
+// Parse a governed-sidecar version into (major, minor). Same digits-only rule as
+// parse_version_parts, and one difference inherited rather than chosen: a
+// MAJOR.MINOR.PATCH spelling is allowed because emitters already write "1.0.0".
+// The PATCH is parsed only to be discarded; a patch never changes what a
+// consumer may assume, so it must never change a verdict.
+std::optional<std::pair<int, int>> parse_contract_version_parts(
+    const std::string& value) {
+    std::vector<std::string> parts;
+    std::string current;
+    for (char c : value) {
+        if (c == '.') { parts.push_back(current); current.clear(); }
+        else { current.push_back(c); }
+    }
+    parts.push_back(current);
+    if (parts.size() != 2 && parts.size() != 3) return std::nullopt;
+    for (const std::string& part : parts) {
+        if (part.empty()) return std::nullopt;
+        for (char c : part) if (c < '0' || c > '9') return std::nullopt;
+    }
+    try {
+        return std::make_pair(std::stoi(parts[0]), std::stoi(parts[1]));
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+// A consumer's declared acceptance, normalized to major -> (minor floor,
+// spelling), mirroring the Python _accepted_map. Two floors for one major are a
+// PROGRAMMING error, not a data error: there is no verdict to give, so it is
+// refused at call time with std::invalid_argument and never at read time.
+using AcceptedMap = std::map<int, std::pair<int, std::string>>;
+
+AcceptedMap accepted_map(
+    const std::vector<std::string>& accepted, const std::string& name,
+    const std::function<std::optional<std::pair<int, int>>(const std::string&)>&
+        parse) {
+    if (accepted.empty()) {
+        throw std::invalid_argument(
+            name + " declares no accepted version; a consumer that accepts "
+            "nothing can read nothing");
+    }
+    AcceptedMap out;
+    for (const std::string& entry : accepted) {
+        const auto parsed = parse(entry);
+        if (!parsed) {
+            throw std::invalid_argument(
+                "supported version '" + entry + "' for " + name +
+                " is not a \"MAJOR.MINOR\" string");
+        }
+        const auto found = out.find(parsed->first);
+        if (found != out.end()) {
+            throw std::invalid_argument(
+                name + " declares two accepted versions with major " +
+                std::to_string(parsed->first) + " ('" + found->second.second +
+                "' and '" + entry + "'); the set carries one MAJOR.MINOR floor "
+                "per major");
+        }
+        out.emplace(parsed->first, std::make_pair(parsed->second, entry));
+    }
+    return out;
+}
+
+// "major 1 (e.g. \"1.0\")", or every accepted major when there is more than one.
+// A refusal that named one major while the consumer accepted two would send the
+// producer to fix the wrong end of a transition window.
+std::string accepted_phrase(const AcceptedMap& accepted) {
+    std::string majors;
+    std::string spellings;
+    for (const auto& entry : accepted) {  // std::map: ordered by major
+        if (!majors.empty()) { majors += ", "; spellings += ", "; }
+        majors += std::to_string(entry.first);
+        spellings += "\"" + entry.second.second + "\"";
+    }
+    const std::string head = accepted.size() == 1 ? "major " : "majors ";
+    return head + majors + " (e.g. " + spellings + ")";
+}
+
 // Up-front document gate: fail fast on the document-level invariants exactly
 // where the C++ host reader does, before any section is consumed.
 void check_document_gate(const YAML::Node& root, const std::string& formatVersion,
@@ -528,20 +606,59 @@ std::string check_format_version(
     }
     const int major = parsed->first;
     const int minor = parsed->second;
-    const auto supported = parse_version_parts(SUPPORTED_FORMAT_VERSION);
-    if (major != supported->first) {
+    const AcceptedMap accepted = accepted_map(
+        std::vector<std::string>(ACCEPTED_FORMAT_VERSIONS.begin(),
+                                 ACCEPTED_FORMAT_VERSIONS.end()),
+        "format_version", parse_version_parts);
+    const auto entry = accepted.find(major);
+    if (entry == accepted.end()) {
         throw ChipletFormatError(
-            "unsupported format_version '" + fv + "'; this reader supports major " +
-            std::to_string(supported->first) + " (e.g. \"" +
-            std::string(SUPPORTED_FORMAT_VERSION) + "\")");
+            "unsupported format_version '" + fv + "'; this reader supports " +
+            accepted_phrase(accepted));
     }
+    const int floor_minor = entry->second.first;
+    const std::string& floor = entry->second.second;
     const std::string normalized =
         std::to_string(major) + "." + std::to_string(minor);
-    if (minor > supported->second && on_warn) {
+    if (minor > floor_minor && on_warn) {
         on_warn("format_version '" + fv + "' is newer than this reader's \"" +
-                std::string(SUPPORTED_FORMAT_VERSION) + "\" (same major " +
-                std::to_string(major) + "); reading it as \"" +
-                std::string(SUPPORTED_FORMAT_VERSION) +
+                floor + "\" (same major " + std::to_string(major) +
+                "); reading it as \"" + floor +
+                "\" and ignoring unknown additions");
+    }
+    return normalized;
+}
+
+std::string check_contract_version(
+    const std::string& value,
+    const std::vector<std::string>& accepted_versions,
+    const std::string& name,
+    const std::function<void(const std::string&)>& on_warn) {
+    const AcceptedMap accepted =
+        accepted_map(accepted_versions, name, parse_contract_version_parts);
+    const auto parsed = parse_contract_version_parts(value);
+    if (!parsed) {
+        throw ChipletFormatError(
+            name + ": malformed version '" + value +
+            "'; expected a quoted \"MAJOR.MINOR\" or \"MAJOR.MINOR.PATCH\" "
+            "string");
+    }
+    const int major = parsed->first;
+    const int minor = parsed->second;
+    const auto entry = accepted.find(major);
+    if (entry == accepted.end()) {
+        throw ChipletFormatError(
+            name + ": unsupported version '" + value + "'; this consumer "
+            "supports " + accepted_phrase(accepted));
+    }
+    const int floor_minor = entry->second.first;
+    const std::string& floor = entry->second.second;
+    const std::string normalized =
+        std::to_string(major) + "." + std::to_string(minor);
+    if (minor > floor_minor && on_warn) {
+        on_warn(name + ": version '" + value + "' is newer than the supported \""
+                + floor + "\" (same major " + std::to_string(major) +
+                "); reading it as \"" + floor +
                 "\" and ignoring unknown additions");
     }
     return normalized;

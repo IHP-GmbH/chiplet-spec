@@ -96,6 +96,22 @@ const YAML::Node& block_oracle() {
     return node;
 }
 
+// The version policy's verdict oracle, on the same terms: a compile-time default
+// derived from this source tree, overridable at run time with
+// CHIPLET_VERSION_ORACLE, and checked for existence in main() before any case
+// runs. JSON is a subset of YAML, so yaml-cpp reads the file the Python side
+// reads with json.load.
+std::string version_oracle_path() {
+    const char* env = std::getenv("CHIPLET_VERSION_ORACLE");
+    if (env != nullptr && *env != '\0') return std::string(env);
+    return std::string(CHIPLET_VERSION_ORACLE_DEFAULT);
+}
+
+const YAML::Node& version_oracle() {
+    static const YAML::Node node = YAML::LoadFile(version_oracle_path());
+    return node;
+}
+
 void test_roundtrip_canonical_example() {
     const std::string path = kExamplesDir + "/interposer_demo_design.chiplet";
     cfio::ChipletDocument first = cfio::load(path);
@@ -673,6 +689,132 @@ void test_reader_release_is_declared() {
 
 }  // namespace
 
+// The version policy's transition window (SPEC-21), driven by
+// conformance/fixtures/version_policy_cases.json: the same rows the Python
+// reference runs in conformance/test_version_policy.py, so the two references
+// are measured against one file instead of against each other.
+//
+// What this cannot run, and says so rather than dropping it: a row whose
+// declared value is not a JSON string. check_contract_version takes a
+// std::string, so a bare number, a null or a list has already been resolved by
+// the loader before this reader is called; those rows carry declared_kind and
+// are Python-only. Every other row runs here.
+void test_version_policy_oracle() {
+    const YAML::Node& oracle = version_oracle();
+    int ran = 0;
+    int skipped = 0;
+    for (const auto& c : oracle["cases"]) {
+        const std::string name = c["name"].as<std::string>();
+        const std::string kind = c["declared_kind"].as<std::string>();
+        if (kind != "string") { ++skipped; continue; }
+        const std::string declared = c["declared"].as<std::string>();
+        const std::string verdict = c["verdict"].as<std::string>();
+        std::vector<std::string> accepted;
+        for (const auto& a : c["accepted"]) {
+            accepted.push_back(a.as<std::string>());
+        }
+        ++ran;
+        if (verdict == "call_error") {
+            // A programming error in the SET: std::invalid_argument, and
+            // deliberately NOT ChipletFormatError, so a consumer's typo never
+            // reads as a bad artifact. check_throws would accept the wrong one.
+            ++g_checks;
+            bool right = false;
+            try {
+                cfio::check_contract_version(declared, accepted, "io_pads.json");
+            } catch (const cfio::ChipletFormatError&) {
+                right = false;
+            } catch (const std::invalid_argument&) {
+                right = true;
+            } catch (...) {
+                right = false;
+            }
+            if (!right) {
+                ++g_failures;
+                std::cerr << "  FAIL (expected a call-time error): " << name
+                          << "\n";
+            }
+            continue;
+        }
+        if (verdict == "refuse") {
+            ++g_checks;
+            std::string message;
+            bool threw = false;
+            try {
+                cfio::check_contract_version(declared, accepted, "io_pads.json");
+            } catch (const cfio::ChipletFormatError& e) {
+                threw = true;
+                message = e.what();
+            } catch (...) {
+            }
+            bool named = threw;
+            if (c["names_majors"]) {
+                for (const auto& m : c["names_majors"]) {
+                    if (message.find(m.as<std::string>()) == std::string::npos) {
+                        named = false;
+                    }
+                }
+                for (const std::string& spelling : accepted) {
+                    if (message.find(spelling) == std::string::npos) {
+                        named = false;
+                    }
+                }
+            }
+            if (!named) {
+                ++g_failures;
+                std::cerr << "  FAIL (refusal): " << name << ": " << message
+                          << "\n";
+            }
+            continue;
+        }
+        // accept and accept_warn: same value back, and the warning fires for
+        // exactly one of the two.
+        std::vector<std::string> warned;
+        std::string got;
+        try {
+            got = cfio::check_contract_version(
+                declared, accepted, "io_pads.json",
+                [&warned](const std::string& m) { warned.push_back(m); });
+        } catch (const std::exception& e) {
+            ++g_checks;
+            ++g_failures;
+            std::cerr << "  FAIL (unexpected throw): " << name << ": "
+                      << e.what() << "\n";
+            continue;
+        }
+        check(got == c["normalized"].as<std::string>(),
+              name + ": normalized version");
+        check(warned.size() == (verdict == "accept_warn" ? 1u : 0u),
+              name + ": the higher-minor event is reported exactly when it is one");
+    }
+    check(ran >= 20, "the version oracle still carries its rows");
+    check(skipped > 0,
+          "the Python-only rows are still in the oracle, not quietly dropped");
+}
+
+// The .chiplet entry point reads the accepted SET, not a private copy of one
+// supported major. Its Python twin swaps the tuple to prove the same thing; here
+// the constant is a compile-time array, so what is checked is the shape of the
+// refusal it produces from that array.
+void test_format_version_refusal_names_every_accepted_major() {
+    check(cfio::ACCEPTED_FORMAT_VERSIONS.size() >= 1,
+          "the reader accepts at least one major");
+    std::string message;
+    try {
+        cfio::check_format_version("2.0");
+    } catch (const cfio::ChipletFormatError& e) {
+        message = e.what();
+    }
+    for (const char* entry : cfio::ACCEPTED_FORMAT_VERSIONS) {
+        check(message.find(entry) != std::string::npos,
+              std::string("the refusal names the accepted version ") + entry);
+    }
+    const bool one = cfio::ACCEPTED_FORMAT_VERSIONS.size() == 1;
+    check(message.find(one ? "supports major " : "supports majors ")
+              != std::string::npos,
+          "the refusal names the accepted majors in the shared phrasing");
+}
+
 int main() {
     std::cout << "chiplet_format_io C++ reference tests\n";
 
@@ -686,6 +828,16 @@ int main() {
                   << oracle << "\n"
                   << "        (set CHIPLET_BLOCK_ORACLE to the path of "
                      "conformance/fixtures/top_level_blocks_cases.json)\n";
+        std::cout << "1 checks, 1 failures\nFAILED\n";
+        return 1;
+    }
+
+    const std::string version_cases = version_oracle_path();
+    if (!std::filesystem::exists(version_cases)) {
+        std::cerr << "  FAIL: version policy oracle not found at "
+                  << version_cases << "\n"
+                  << "        (set CHIPLET_VERSION_ORACLE to the path of "
+                     "conformance/fixtures/version_policy_cases.json)\n";
         std::cout << "1 checks, 1 failures\nFAILED\n";
         return 1;
     }
@@ -714,6 +866,8 @@ int main() {
     test_malformed_version_rejected();
     test_typed_writer_stamps_supported_for_higher_minor();
     test_reader_release_is_declared();
+    test_version_policy_oracle();
+    test_format_version_refusal_names_every_accepted_major();
     test_source_has_no_gpl_or_qt_dependency();
 
     std::cout << g_checks << " checks, " << g_failures << " failures\n";
