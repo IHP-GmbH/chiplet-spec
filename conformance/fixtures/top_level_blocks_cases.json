@@ -1,0 +1,246 @@
+{
+  "$comment": "Accept/reject oracle for the TOP-LEVEL BLOCK GRAMMAR of a .chiplet document (docs/CHIPLET_FORMAT_SPEC.md, 'Top-level block grammar'). The grammar answers one question on the raw text, never on a parsed node tree: which run of lines belongs to which top-level key. Flow rule 4 (a host re-emits a flow block it did not author byte for byte) is defined in terms of it, and three implementations run THIS file rather than being compared to each other: the merge splitter in the KiCad plugin (chiplet_merge.split_top_level_blocks), the Python reference (chiplet_format_io.top_level_blocks) and the C++ reference (ChipletDocument::flow_yaml). Add a case here, never in a consumer. key_lines: 'line' is LINE CONTENT, i.e. the text up to the next LF with one optional trailing CR already removed; 'key' is capture group 1 of ^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:\\s.*)? anchored at both ends. Anchoring note, the same one adapter_id_cases.json carries: end the expression with \\Z in Python re or (?![\\s\\S]) portably, or match the whole content (std::regex_match); $ is WRONG in Python (it also matches before a trailing newline). ECMAScript's . excludes CR as well as LF, so a std::regex implementation writes [^\\n] where the expression writes . ; on a line the two mean the same thing. splits: 'doc' is the whole document text and 'blocks' is the exact slice per top-level key in document order, key line included, line endings untouched, nothing normalised. The empty key is the PREAMBLE (lines before the first key line). Concatenating every slice in order reproduces 'doc' byte for byte, which is the property that makes the grammar lossless; the one case where a key repeats carries \"reconstructs\": false, because its two runs are joined under the first occurrence and are therefore not contiguous in the source. A case with \"loadable\": false is a splitter-only document that no reader is required to load. refuse: a quoted key at column zero is valid YAML but is NOT a key line, so a splitter would attach it to the preceding block, where its owner drops it on the next re-export. Any host that splits MUST refuse such a document instead of mis-attributing it (the ownership guard). A reader that does not split, such as the Python reference's loads(), is not bound by it; the Python top_level_blocks() and the C++ loads(), which do split, are.",
+  "key_lines": {
+    "accept": [
+      {
+        "line": "flow:",
+        "key": "flow"
+      },
+      {
+        "line": "flow: value",
+        "key": "flow"
+      },
+      {
+        "line": "flow: # a trailing comment",
+        "key": "flow"
+      },
+      {
+        "line": "flow:\t",
+        "key": "flow"
+      },
+      {
+        "line": "flow: ",
+        "key": "flow"
+      },
+      {
+        "line": "_metadata:",
+        "key": "_metadata"
+      },
+      {
+        "line": "format_version: \"1.0\"",
+        "key": "format_version"
+      },
+      {
+        "line": "a.b-c_d:",
+        "key": "a.b-c_d"
+      },
+      {
+        "line": "0start:",
+        "key": "0start"
+      },
+      {
+        "line": "netlist: {}",
+        "key": "netlist"
+      }
+    ],
+    "reject": [
+      "  flow:",
+      "\tflow:",
+      "\"flow\":",
+      "'flow':",
+      "flow:value",
+      "---",
+      "...",
+      ":",
+      ": value",
+      "# flow:",
+      "",
+      "-flow:",
+      ".flow:",
+      "flow",
+      "fl ow:",
+      "flow :"
+    ]
+  },
+  "splits": [
+    {
+      "name": "flow_block_with_a_comment_a_quoted_scalar_and_a_variable",
+      "doc": "format_version: \"1.0\"\nassembly:\n  name: demo\nflow:\n  # export first, then assemble\n  steps:\n    - name: export\n      tool: 'kicad'\n      layout: ${component.die_0.layout_path}\n      mode: '0755'\n",
+      "blocks": [
+        {
+          "key": "format_version",
+          "text": "format_version: \"1.0\"\n"
+        },
+        {
+          "key": "assembly",
+          "text": "assembly:\n  name: demo\n"
+        },
+        {
+          "key": "flow",
+          "text": "flow:\n  # export first, then assemble\n  steps:\n    - name: export\n      tool: 'kicad'\n      layout: ${component.die_0.layout_path}\n      mode: '0755'\n"
+        }
+      ],
+      "note": "The discriminating case for flow rule 4. A node dump loses the comment, re-quotes 'kicad' and '0755' (which a YAML 1.1 loader then reads as the integer 493 once the quotes are gone) and may resolve the ${...} reference."
+    },
+    {
+      "name": "blank_and_comment_lines_between_blocks_attach_to_the_preceding_block",
+      "doc": "format_version: \"1.0\"\nassembly:\n  name: demo\n\n# a note that sits between two blocks\n\nflow:\n  steps: []\n",
+      "blocks": [
+        {
+          "key": "format_version",
+          "text": "format_version: \"1.0\"\n"
+        },
+        {
+          "key": "assembly",
+          "text": "assembly:\n  name: demo\n\n# a note that sits between two blocks\n\n"
+        },
+        {
+          "key": "flow",
+          "text": "flow:\n  steps: []\n"
+        }
+      ],
+      "note": "A comment written directly above flow: belongs to the block before it. Surprising when read as prose, but it is what the merge splitter does and the alternative moves bytes between two blocks with different owners."
+    },
+    {
+      "name": "last_block_at_end_of_file_without_a_trailing_newline",
+      "doc": "format_version: \"1.0\"\nassembly:\n  name: demo\nflow:\n  steps: []",
+      "blocks": [
+        {
+          "key": "format_version",
+          "text": "format_version: \"1.0\"\n"
+        },
+        {
+          "key": "assembly",
+          "text": "assembly:\n  name: demo\n"
+        },
+        {
+          "key": "flow",
+          "text": "flow:\n  steps: []"
+        }
+      ],
+      "note": "No trailing-newline normalisation: the slice ends where the file ends."
+    },
+    {
+      "name": "crlf_line_endings_are_kept_in_the_slice",
+      "doc": "format_version: \"1.0\"\r\nassembly:\r\n  name: demo\r\nflow:\r\n  # a comment\r\n  steps: []\r\n",
+      "blocks": [
+        {
+          "key": "format_version",
+          "text": "format_version: \"1.0\"\r\n"
+        },
+        {
+          "key": "assembly",
+          "text": "assembly:\r\n  name: demo\r\n"
+        },
+        {
+          "key": "flow",
+          "text": "flow:\r\n  # a comment\r\n  steps: []\r\n"
+        }
+      ],
+      "note": "The CR is removed to decide whether a line is a key line, and kept in the slice. An implementation that anchors with ECMAScript's . instead of [^\\n] fails the key line 'flow: value\\r' here."
+    },
+    {
+      "name": "document_that_starts_with_a_marker_has_a_preamble",
+      "doc": "---\nformat_version: \"1.0\"\nassembly:\n  name: demo\nflow:\n  steps: []\n",
+      "blocks": [
+        {
+          "key": "",
+          "text": "---\n"
+        },
+        {
+          "key": "format_version",
+          "text": "format_version: \"1.0\"\n"
+        },
+        {
+          "key": "assembly",
+          "text": "assembly:\n  name: demo\n"
+        },
+        {
+          "key": "flow",
+          "text": "flow:\n  steps: []\n"
+        }
+      ],
+      "note": "--- is not a key line, so it lands in the preamble, keyed by the empty string."
+    },
+    {
+      "name": "leading_comment_block_is_preamble",
+      "doc": "# generated by the exporter, do not edit by hand\n# see docs/CHIPLET_FORMAT_SPEC.md\nformat_version: \"1.0\"\nassembly:\n  name: demo\n",
+      "blocks": [
+        {
+          "key": "",
+          "text": "# generated by the exporter, do not edit by hand\n# see docs/CHIPLET_FORMAT_SPEC.md\n"
+        },
+        {
+          "key": "format_version",
+          "text": "format_version: \"1.0\"\n"
+        },
+        {
+          "key": "assembly",
+          "text": "assembly:\n  name: demo\n"
+        }
+      ]
+    },
+    {
+      "name": "repeated_top_level_key_concatenates_onto_the_first_occurrence",
+      "doc": "format_version: \"1.0\"\nassembly:\n  name: demo\nflow:\n  steps: []\nnetlist:\n  nets: []\nflow:\n  extra: true\n",
+      "blocks": [
+        {
+          "key": "format_version",
+          "text": "format_version: \"1.0\"\n"
+        },
+        {
+          "key": "assembly",
+          "text": "assembly:\n  name: demo\n"
+        },
+        {
+          "key": "flow",
+          "text": "flow:\n  steps: []\nflow:\n  extra: true\n"
+        },
+        {
+          "key": "netlist",
+          "text": "netlist:\n  nets: []\n"
+        }
+      ],
+      "note": "Splitter-only. The first occurrence keeps its position and the runs concatenate, so no text is dropped; the document itself is malformed, and not in a way the splitter can repair: PyYAML resolves flow to the last value, yaml-cpp to the first.",
+      "loadable": false,
+      "reconstructs": false
+    },
+    {
+      "name": "indented_and_commented_key_shaped_lines_stay_inside_their_block",
+      "doc": "format_version: \"1.0\"\nassembly:\n  name: demo\n  # flow:\n  flow: not a top level key\nflow:\n  steps: []\n",
+      "blocks": [
+        {
+          "key": "format_version",
+          "text": "format_version: \"1.0\"\n"
+        },
+        {
+          "key": "assembly",
+          "text": "assembly:\n  name: demo\n  # flow:\n  flow: not a top level key\n"
+        },
+        {
+          "key": "flow",
+          "text": "flow:\n  steps: []\n"
+        }
+      ],
+      "note": "Splitter-only (assembly.flow is not a modelled key). Column zero is the whole test: an indented flow: and a commented one belong to assembly.",
+      "loadable": false
+    }
+  ],
+  "refuse": [
+    {
+      "name": "double_quoted_key_at_column_zero",
+      "doc": "format_version: \"1.0\"\nassembly:\n  name: demo\n\"flow\":\n  steps: []\n",
+      "reason": "A splitter attaches \"flow\": and its body to the assembly block, where the exporter owns them and regenerates them away on the next export. Refuse instead of mis-attributing."
+    },
+    {
+      "name": "single_quoted_key_at_column_zero",
+      "doc": "format_version: \"1.0\"\nassembly:\n  name: demo\n'flow':\n  steps: []\n",
+      "reason": "Same guard for the single-quoted spelling."
+    },
+    {
+      "name": "quoted_key_at_column_zero_without_a_flow_block",
+      "doc": "format_version: \"1.0\"\n\"assembly\":\n  name: demo\n",
+      "reason": "The guard is about block ownership, not about flow: a document with a quoted key at column zero is refused whether or not it carries a flow block. This is the spelling a document-wide key-quoting emitter switch produces (validation rule 7)."
+    }
+  ]
+}
