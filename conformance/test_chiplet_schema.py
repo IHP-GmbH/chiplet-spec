@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 import jsonschema
+import pytest
 import yaml
 from jsonschema.validators import validator_for
 
@@ -249,33 +250,45 @@ def test_interposer_requires_an_adapter():
     assert not _valid(doc)
 
 
-def test_interposer_adapter_that_is_a_path_is_rejected():
-    # The whole point of the field: a registry id the ADK resolves, never a
-    # filesystem path. A path ties a portable assembly to one machine's layout.
-    for bad in ("./adapters/intm4tm2.drc", "/opt/adk/intm4tm2.drc",
-                "pdk_adapters/interposer/intm4tm2", "../intm4tm2",
-                "adapters\\intm4tm2", "intm4tm2.drc", ".intm4tm2",
-                "-intm4tm2", "intm4tm2 ", "", "intm4tm2/",
-                # A TRAILING NEWLINE. The list tested a trailing space and not
-                # this, and the gap was real: with a plain ``$`` anchor Python's
-                # re matches immediately before a single trailing newline, so
-                # "intm4tm2\n" validated here. An ECMA-262 validator rejects the
-                # same pattern, so the schema meant two different things
-                # depending on who read it. The pattern now ends in (?![\s\S]),
-                # true end-of-input in both dialects. Found by the kicad-plugin
-                # session on the ADK registry contract, 2026-09-03.
-                "intm4tm2\n", "intm4tm2\n\n", "\nintm4tm2"):
-        doc = copy.deepcopy(ALL_BLOCKS)
-        doc["interposer"]["adapter"] = bad
-        assert not _valid(doc), bad
+#: The exported adapter-id oracle. One file, run by every implementation's
+#: parity test (adk_registry, the KiCad plugin, Mosaic, chiplet-studio), so the
+#: proposition "rejects everything the schema rejects" is exercised on the same
+#: set everywhere. The tests below prove the file against the schema itself.
+ADAPTER_ID_CASES = json.loads(
+    (FIXTURES / "adapter_id_cases.json").read_text(encoding="utf-8"))
 
 
-def test_interposer_adapter_registry_ids_are_accepted():
-    for good in ("intm4tm2", "intm4tm2_v2", "intm4tm2.rev-b", "IHP_intm4tm2",
-                 "gf180mcu", "a"):
+def test_adapter_id_oracle_is_wellformed():
+    acc, rej = ADAPTER_ID_CASES["accept"], ADAPTER_ID_CASES["reject"]
+    assert acc and rej
+    assert all(isinstance(x, str) for x in acc + rej)
+    assert not set(acc) & set(rej)
+    assert len(acc) == len(set(acc)) and len(rej) == len(set(rej))
+    # The two defects that motivated the file must be in it by name: a deck
+    # file name (accepted by a pattern-only implementation) and a trailing
+    # newline (accepted by a $-anchored one).
+    assert "evil.drc" in rej and "intm4tm2\n" in rej
+
+
+@pytest.mark.parametrize("field", ["interposer", "interconnect"])
+def test_adapter_oracle_rejects_are_rejected_by_the_schema(field):
+    # A registry id the ADK resolves, never a filesystem path, never a deck
+    # name. The trailing-newline entries are here because with a plain ``$``
+    # anchor Python's re matches before a single trailing newline while an
+    # ECMA-262 validator rejects it, so the schema meant two things depending
+    # on who read it; the pattern ends in (?![\s\S]) for that reason.
+    for bad in ADAPTER_ID_CASES["reject"]:
         doc = copy.deepcopy(ALL_BLOCKS)
-        doc["interposer"]["adapter"] = good
-        assert _valid(doc), good
+        doc[field]["adapter"] = bad
+        assert not _valid(doc), (field, bad)
+
+
+@pytest.mark.parametrize("field", ["interposer", "interconnect"])
+def test_adapter_oracle_accepts_are_accepted_by_the_schema(field):
+    for good in ADAPTER_ID_CASES["accept"]:
+        doc = copy.deepcopy(ALL_BLOCKS)
+        doc[field]["adapter"] = good
+        assert _valid(doc), (field, good)
 
 
 def test_interposer_adapter_must_be_a_string():
