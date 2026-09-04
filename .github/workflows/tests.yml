@@ -43,6 +43,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The version-policy sweep test resolves every commit the sweep names, so
+          # this job needs the history. Under the default depth of 1 it fails on the
+          # first sha, and it did, the first time the gate ever ran on a head carrying
+          # the sweep: the earlier heads reached dev by a push that bypassed branch
+          # protection, so this check had never actually executed here.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:

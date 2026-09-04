@@ -15,6 +15,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <set>
 #include <sstream>
 #include <string>
 
@@ -65,6 +67,26 @@ void check_throws(Fn fn, const std::string& what) {
         ++g_failures;
         std::cerr << "  FAIL (expected throw): " << what << "\n";
     }
+}
+
+// "U+2028" -> the UTF-8 bytes of that code point. The oracle names its subjects
+// by code point, and a test that needs the raw character has to be able to build
+// it rather than carry a second copy of the set.
+std::string utf8_of(const std::string& code_point) {
+    const unsigned int cp =
+        static_cast<unsigned int>(std::stoul(code_point.substr(2), nullptr, 16));
+    std::string out;
+    if (cp < 0x80) {
+        out += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+        out += static_cast<char>(0xC0 | (cp >> 6));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+        out += static_cast<char>(0xE0 | (cp >> 12));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+    return out;
 }
 
 std::string read_file(const std::string& path) {
@@ -422,10 +444,24 @@ void test_flow_block_is_re_emitted_byte_for_byte() {
 // is the write one, and that is where it is charged.
 void test_quoted_key_at_column_zero_loads_and_may_refuse_to_write() {
     const YAML::Node& oracle = block_oracle();
+    check(oracle["version"] && oracle["version"].as<int>() >= 2,
+          "the oracle states its version, so a stale copy can say so");
     int cases = 0;
     for (const auto& c : oracle["refuse"]) {
         const std::string name = c["name"].as<std::string>();
         const std::string doc = c["doc"].as<std::string>();
+        // Which implementation owes the refusal is a FIELD, never the group.
+        // This reader is only ever the "reader" half of it, and reads "loads"
+        // as it always did; the check here is that the two say the same thing,
+        // so a row that reaches a splitting host cannot mean one verdict there
+        // and another here.
+        std::set<std::string> refused_by;
+        for (const auto& who : c["refused_by"]) {
+            refused_by.insert(who.as<std::string>());
+        }
+        check(!refused_by.empty(), name + ": says who refuses it");
+        check((refused_by.count("reader") == 1) == !c["loads"].as<bool>(),
+              name + ": refused_by and loads agree about the reader");
         if (!c["loads"].as<bool>()) {
             check_throws([&] { cfio::loads(doc); }, name + ": refused at load");
             continue;
@@ -497,21 +533,32 @@ void test_flow_block_the_grammar_cannot_delimit_loads_but_does_not_write() {
                    "and writes back without complaint");
 }
 
-// The format's line breaks are LF and CRLF. NEL, U+2028 and U+2029 anywhere in a
-// document make it ill-formed, and both reference readers refuse it on the TEXT,
-// before their parser sees it, because the two parsers do not agree on what the
-// document is: measured on PyYAML 6.0.3 and yaml-cpp 0.8.0, the smuggle shape
-// gives PyYAML a second top-level key and throws here, and the plain-scalar
-// shape loads here and throws in PyYAML. So this cannot be checked as "loads()
-// throws": yaml-cpp throws on half of these cases anyway, with a message about a
-// map value that names neither the character nor the reason. The message is the
-// assertion.
+// The format's line breaks are LF and CRLF. A character a YAML parser breaks a
+// line on and the top-level block grammar does not makes a document ill-formed,
+// and both reference readers refuse it on the TEXT, before their parser sees it.
+// Measured on PyYAML 6.0.3 and yaml-cpp 0.8.0: the smuggle shape gives PyYAML a
+// second top-level key and throws here, and the plain-scalar shape loads here
+// and throws in PyYAML. So this cannot be checked as "loads() throws": yaml-cpp
+// throws on half of these cases anyway, with a message about a map value that
+// names neither the character nor the reason. The message is the assertion.
+//
+// The SET is not written down here. It comes off the oracle, which the Python
+// side derives by running PyYAML over a code-point range; a hand-written count
+// in this file is what let the rule ship with three of its four members.
 void test_forbidden_line_breaks_are_refused_with_a_text_level_reason() {
     const YAML::Node& oracle = block_oracle();
     int cases = 0;
+    int expected = 0;
+    std::set<std::string> code_points;
+    std::map<std::string, int> shapes;
+    for (const auto& c : oracle["refuse"]) {
+        if (c["kind"].as<std::string>() == "forbidden_line_break") ++expected;
+    }
     for (const auto& c : oracle["refuse"]) {
         if (c["kind"].as<std::string>() != "forbidden_line_break") continue;
         ++cases;
+        code_points.insert(c["code_point"].as<std::string>());
+        ++shapes[c["code_point"].as<std::string>()];
         const std::string name = c["name"].as<std::string>();
         const std::string doc = c["doc"].as<std::string>();
         const std::string code_point = c["code_point"].as<std::string>();
@@ -537,46 +584,144 @@ void test_forbidden_line_breaks_are_refused_with_a_text_level_reason() {
                   tag + ": and is the format's refusal, not yaml-cpp's");
         }
     }
-    check(cases == 6,
-          "the oracle carries both shapes of all three forbidden line breaks");
+    check(cases == expected,
+          "every forbidden_line_break row in the oracle was measured");
+    check(code_points.size() >= 4,
+          "the oracle carries all four members of the line-break set");
+    for (const std::string& cp : code_points) {
+        check(shapes[cp] >= 2,
+              cp + ": the oracle carries both shapes of the disagreement");
+    }
+}
+
+// The splits group's LOAD verdict, both halves of it. "loadable": false is an
+// OBLIGATION to refuse and its absence an obligation to load; as a permission
+// ("no reader is required to load this") it let a row claim a refusal that never
+// happened while every test stayed green, and it let a forbidden-character case
+// be parked under splits where no load verdict would ever reach it.
+void test_the_splits_load_verdict_is_executed_both_ways() {
+    const YAML::Node& oracle = block_oracle();
+    int loading = 0, refusing = 0;
+    cfio::LoadOptions opts;
+    opts.validate = false;
+    for (const auto& c : oracle["splits"]) {
+        const std::string name = c["name"].as<std::string>();
+        const std::string doc = c["doc"].as<std::string>();
+        const bool loadable = !c["loadable"] || c["loadable"].as<bool>();
+        if (loadable) {
+            ++loading;
+            check_no_throw([&] { cfio::loads(doc, opts); },
+                           name + ": no load flag, so it loads");
+        } else {
+            ++refusing;
+            check_throws([&] { cfio::loads(doc, opts); },
+                         name + ": flagged, so it is refused at load");
+        }
+    }
+    check(loading > 0 && refusing > 0,
+          "both halves of the splits load flag are exercised");
+
+    // The way out of the line-break rule, and the control that tells a rule from
+    // a blanket ban: the refusal is on the RAW bytes, so the escaped spelling
+    // loads and carries the value.
+    for (const auto& c : oracle["splits"]) {
+        if (c["name"].as<std::string>() !=
+            "escaped_line_break_in_a_double_quoted_scalar_is_ordinary_text") {
+            continue;
+        }
+        const std::string doc = c["doc"].as<std::string>();
+        check(doc.find("\xE2\x80\xA8") == std::string::npos,
+              "the control carries no raw code point");
+        cfio::ChipletDocument parsed;
+        check_no_throw([&] { parsed = cfio::loads(doc); },
+                       "the escaped spelling loads");
+        check(parsed.assembly.name == "demo\xE2\x80\xA8x",
+              "and carries U+2028 in the value");
+    }
+}
+
+// CR is the conditional member, so it is measured from both sides on a real
+// document rather than only through the refuse rows: a CRLF file is ordinary,
+// and the same file with one LF taken out of a terminator is refused. Without
+// this, "refuse every CR" would pass every other check in this file.
+void test_crlf_survives_the_carriage_return_rule() {
+    const YAML::Node& oracle = block_oracle();
+    std::string crlf;
+    for (const auto& c : oracle["splits"]) {
+        if (c["name"].as<std::string>().find("crlf") != std::string::npos) {
+            crlf = c["doc"].as<std::string>();
+        }
+    }
+    check(!crlf.empty() && crlf.find("\r\n") != std::string::npos,
+          "the oracle still carries a CRLF document");
+    cfio::ChipletDocument parsed;
+    check_no_throw([&] { parsed = cfio::loads(crlf); },
+                   "a CRLF document loads");
+    check(parsed.assembly.name == "demo",
+          "and its values are untouched by the carriage-return rule");
+
+    std::string broken = crlf;
+    const std::size_t at = broken.find("\r\n");
+    broken.erase(at + 1, 1);
+    std::string message;
+    try {
+        cfio::loads(broken);
+    } catch (const cfio::ChipletFormatError& e) {
+        message = e.what();
+    }
+    check(message.find("U+000D") != std::string::npos,
+          "the same document with one LF removed is refused, naming U+000D");
+    check(message.find("line 1") != std::string::npos,
+          "and naming the line the CR is on");
 }
 
 // The writer half of the same rule, and it needs doing rather than asserting:
-// yaml-cpp writes all three as RAW bytes in every style, double-quoted included
-// (measured on 0.8.0), so a document a host built with one in a field would be
-// written out as a file neither reference reader will open again.
+// yaml-cpp writes NEL, U+2028 and U+2029 as RAW bytes in every style,
+// double-quoted included (measured on 0.8.0), so a document a host built with
+// one in a field would be written out as a file neither reference reader will
+// open again. CR is the member yaml-cpp escapes on its own (measured: an emitted
+// scalar carrying one comes out as "demo\rx"), and it is asserted on the same
+// terms rather than trusted, because that is a fact about a version.
+//
+// The subjects come off the ORACLE, so a fifth member of the set arrives here as
+// a failing check rather than as a silently untested one.
 void test_the_writer_escapes_what_the_reader_refuses() {
-    const std::string raw[3] = {"\xC2\x85", "\xE2\x80\xA8", "\xE2\x80\xA9"};
-    const std::string escaped[3] = {"\\N", "\\L", "\\P"};
-    for (int i = 0; i < 3; ++i) {
+    const YAML::Node& oracle = block_oracle();
+    std::set<std::string> code_points;
+    for (const auto& c : oracle["refuse"]) {
+        if (c["kind"].as<std::string>() != "forbidden_line_break") continue;
+        code_points.insert(c["code_point"].as<std::string>());
+    }
+    check(code_points.size() >= 4, "the oracle names the whole set");
+    for (const std::string& cp : code_points) {
+        const std::string raw = utf8_of(cp);
         cfio::ChipletDocument doc;
         doc.format_version = cfio::SUPPORTED_FORMAT_VERSION;
-        doc.assembly.name = "demo" + raw[i] + "x";
+        doc.assembly.name = "demo" + raw + "x";
         const std::string text = cfio::dumps(doc);
-        check(text.find(raw[i]) == std::string::npos,
-              escaped[i] + ": no raw code point reaches the file");
+        check(text.find(raw) == std::string::npos,
+              cp + ": no raw code point reaches the file");
         // The SPELLING of the escape is the emitter's, not the format's, and the
         // two references differ: PyYAML writes \N, \L and \P, and yaml-cpp
-        // writes \x85 for the first and \L and \P for the other two. Both name
-        // the same character and both round-trip, and the header has always said
-        // the two writers are semantically equivalent, not byte-identical. What
-        // is asserted here is the property: an escape, and the value back.
-        check(text.find(escaped[i]) != std::string::npos ||
-                  text.find("\\x85") != std::string::npos,
-              escaped[i] + ": it is written as an escape");
+        // writes \x85 for NEL and \L and \P for the other two. Both name the
+        // same character and both round-trip, and the header has always said the
+        // two writers are semantically equivalent, not byte-identical. What is
+        // asserted here is the property: a backslash escape, and the value back.
+        check(text.find("\\") != std::string::npos,
+              cp + ": it is written as an escape");
         cfio::ChipletDocument reloaded;
         check_no_throw([&] { reloaded = cfio::loads(text); },
-                       escaped[i] + ": the file this writer produced loads");
+                       cp + ": the file this writer produced loads");
         check(reloaded.assembly.name == doc.assembly.name,
-              escaped[i] + ": and the value round-trips unchanged");
+              cp + ": and the value round-trips unchanged");
         // And the other writer rule is not paid for with this one: the pass that
         // escapes quotes every string, and the top-level keys go back to bare
         // before the bytes leave, or the file this writer produced could not be
         // split by the grammar it defines.
         check(text.rfind("format_version:", 0) == 0,
-              escaped[i] + ": the top-level keys are still bare");
+              cp + ": the top-level keys are still bare");
         check(text.find("\nassembly:") != std::string::npos,
-              escaped[i] + ": every one of them, not just the first");
+              cp + ": every one of them, not just the first");
     }
     // The ordinary document is untouched by the rule: the retry that quotes
     // every string runs only for a document that has one of the three in it.
@@ -1097,6 +1242,8 @@ int main() {
     test_flow_block_is_re_emitted_byte_for_byte();
     test_quoted_key_at_column_zero_loads_and_may_refuse_to_write();
     test_forbidden_line_breaks_are_refused_with_a_text_level_reason();
+    test_crlf_survives_the_carriage_return_rule();
+    test_the_splits_load_verdict_is_executed_both_ways();
     test_the_writer_escapes_what_the_reader_refuses();
     test_flow_block_the_grammar_cannot_delimit_loads_but_does_not_write();
     test_hand_built_flow_value_without_a_key_line_still_emits();

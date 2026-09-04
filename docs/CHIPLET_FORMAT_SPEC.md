@@ -843,17 +843,50 @@ line, a bare `:` and a key containing a space are not key lines.
 
 ### Line breaks (normative)
 
-A document's line breaks are **LF** and **CRLF**, and nothing else. NEL
-(`U+0085`), LINE SEPARATOR (`U+2028`) and PARAGRAPH SEPARATOR (`U+2029`) anywhere
-in a document make it **ill-formed**, whether they sit in a scalar, a comment or
-a key, and both reference readers refuse such a document at load, on the text,
-before any YAML parse.
+A document's line breaks are **LF** and **CRLF**, and nothing else.
 
-The reason is the same one that makes a repeated top-level key ill-formed: a YAML
-1.1 parser (PyYAML) treats all three as line breaks and a YAML 1.2 parser
-(yaml-cpp) does not, so the same bytes are two different documents and no reading
-of them is conforming. The disagreement is not academic and it runs in both
-directions, measured on PyYAML 6.0.3 and yaml-cpp 0.8.0:
+The criterion that generates the rest of this section, stated once: **a character
+that a YAML parser treats as a line break and THIS GRAMMAR does not makes a
+document ill-formed.** The grammar is not one consumer among many. It is what the
+repeated-top-level-key scan, flow rule 4, `top_level_blocks()` and every
+splitting host read, so a character that moves a line for the parser and not for
+the grammar hides a top-level key from all of them at once, and the hidden key is
+the one that wins: the parser builds the document a consumer then acts on.
+
+Stating the criterion this way makes it EXECUTABLE, which is the point.
+`conformance/test_top_level_blocks.py` derives the members by running a parser
+over a code-point range and asserts the reference reader refuses exactly what the
+derivation finds. Measured over `U+0000..U+21FF` on PyYAML 6.0.3, the set has
+four members:
+
+| Code point | Ill-formed |
+|------------|------------|
+| `U+000D` CARRIAGE RETURN | unless the next byte is LF |
+| `U+0085` NEXT LINE | anywhere |
+| `U+2028` LINE SEPARATOR | anywhere |
+| `U+2029` PARAGRAPH SEPARATOR | anywhere |
+
+"Anywhere" means anywhere: in a scalar, in a comment, in a key. Both reference
+readers refuse such a document at load, on the text, before any YAML parse, and
+the refusal names the code point and the line, because all four are invisible in
+an editor.
+
+**A CR at end of file, with no LF after it, is refused too.** That case is
+DECIDED here rather than inherited, because nothing else forces it: both
+reference parsers accept such a document and agree on it (PyYAML 6.0.3 and
+yaml-cpp 0.8.0 both drop the CR and read `demo`). It is refused for two reasons.
+The rule stays ONE property of the bytes, "every CR is immediately followed by
+LF", which is what a splitter carrying no YAML lexer can enforce in a single pass
+over the text. And both reference line splitters pop a trailing CR whether or not
+an LF follows it, so accepting the document would mean every implementation reads
+one byte less than the file holds and none of them says so.
+
+The SECOND reason, sharper but narrower, covers `U+0085`, `U+2028` and `U+2029`
+only: a YAML 1.1 parser (PyYAML) treats those three as line breaks and a YAML 1.2
+parser (yaml-cpp) does not, so the same bytes are two different documents and no
+reading of them is conforming, exactly as for a repeated top-level key. The
+disagreement is not academic and it runs in both directions, measured on PyYAML
+6.0.3 and yaml-cpp 0.8.0:
 
 - `name: demo<U+2028>format_version: "9.0"` inside `assembly` gives PyYAML a
   SECOND top-level `format_version` whose value wins, with the top-level key list
@@ -864,21 +897,83 @@ directions, measured on PyYAML 6.0.3 and yaml-cpp 0.8.0:
   document with the three bytes inside the scalar, and PyYAML throws.
 
 So neither reader can be made to imitate the other, and the refusal belongs to
-the format rather than to either parser. It names the code point and the line,
-because all three are invisible in an editor.
+the format rather than to either parser.
 
-A WRITER that holds one of the three in a value MUST escape it inside a
-double-quoted scalar (`\N`, `\L`, `\P`, or the equivalent `\xNN`/`\uNNNN`
+That second reason does NOT generate `U+000D`, and `U+000D` is the member with
+the widest blast radius, being one lost byte away from any CRLF file. Both
+parsers break a line on a lone CR. Measured on the same two versions:
+`name: demo<CR>format_version: "9.0"` gives PyYAML a second top-level
+`format_version` whose value wins and gives yaml-cpp an `illegal map value` throw
+at line 3, column 28; `name: demo<CR>trailing` loads in yaml-cpp with the CR
+FOLDED TO A SPACE, so `assembly.name` comes back as `demo trailing`, and throws a
+`ScannerError` in PyYAML. One reader silently changes the value, the other
+refuses the file, and the grammar sees neither. A set built from the
+parser-versus-parser reading alone has three members instead of four, which is
+how this rule first shipped, and is why the set is derived rather than listed.
+
+A WRITER that holds one of the four in a value MUST escape it inside a
+double-quoted scalar (`\r`, `\N`, `\L`, `\P`, or the equivalent `\xNN`/`\uNNNN`
 spelling its emitter produces) rather than write the raw character, so that what
 it wrote is a document these readers still open. This is not hypothetical for a
-writer built on PyYAML: `yaml.safe_dump(allow_unicode=True)` writes all three raw
-into a single-quoted scalar, and PyYAML then folds them back on the next read, so
-the value does not survive the round trip.
+writer built on PyYAML: `yaml.safe_dump(allow_unicode=True)` writes NEL, LS and
+PS raw into a single-quoted scalar, and PyYAML then folds them back on the next
+read, so the value does not survive the round trip. Both reference emitters
+already escape CR without being asked; that is a fact about two versions, so the
+conformance tests assert it for CR on the same terms as for the other three.
 
-Refusing these three costs nothing on any document that exists: a sweep of every
-`.chiplet` in the ecosystem outside build trees, plus the YAML and stackups
-shipped alongside them, found zero occurrences, and the KiCad plugin found zero
-in 187 `.chiplet`.
+**The refusal is on the RAW BYTES; the ESCAPED spellings stay legal.** That is
+the discriminating rule of this whole section, and it is what makes the set
+liveable: a value that genuinely needs one of these characters is written
+`name: "demo\Lx"`, which is two ordinary characters to the grammar and reads back
+as `demo<U+2028>x`. The oracle carries that document as a case that must LOAD, so
+the control for this rule is a document that opens rather than a second document
+that is refused for a different reason.
+
+What is NOT true, and was believed here for a while, is that putting the raw
+character inside a double-quoted scalar makes the two readers agree. Measured on
+PyYAML 6.0.3 and yaml-cpp 0.8.0:
+
+- A raw CR or NEL inside a double-quoted scalar FOLDS TO A SPACE in PyYAML:
+  `"demo<CR>x"` and `"demo<NEL>x"` both read back as `demo x`. yaml-cpp folds the
+  CR the same way but KEEPS the NEL bytes, so on the NEL the two readers return
+  different strings and neither says anything.
+- A raw LS or PS is folded by neither reader, but the whitespace AROUND it is
+  dropped by PyYAML and kept by yaml-cpp: `"demo<LS>   x"` reads back as
+  `demo<LS>x` in PyYAML and as `demo<LS>   x` in yaml-cpp, and the same goes for a
+  tab after the character or spaces before it. The apparent agreement holds for
+  exactly one spelling, the one with no adjacent whitespace.
+
+So a quoted scalar is not the safe place for the raw character. It is the place
+where the disagreement stops being about the document's SHAPE, where a key list
+would show it, and becomes a difference in a VALUE, where nothing downstream can
+see it at all.
+
+One caveat on the escaped spellings, measured rather than assumed: yaml-cpp 0.8.0
+reads `\N` as the single byte `0x85` instead of the UTF-8 encoding of `U+0085`,
+while PyYAML reads it as `U+0085`. Both accept the document; they disagree about
+the bytes in the value. `\x85` is read correctly by both and is what the C++
+reference writer emits, so prefer it for NEL. `\r`, `\L` and `\P` agree in both
+readers.
+
+**Why refusing these four is safe.** Not because "the population is zero". A
+sweep bounds the CORPUS it walked, and no corpus anyone here can walk covers
+build trees, what a user pastes into a GUI (LS and PS are exactly what a paste
+from a web page carries), the documents held by the KiCad fork's users, or git
+history. The load-bearing argument is the writer rule plus the escaped form: no
+producer of ours can emit one of these characters raw once the rule above is in,
+and any value that genuinely needs one is carried escaped, so a document that
+meets this refusal was not written by a conforming producer. That was measured
+rather than asserted: all 19 `.chiplet` in this repository, fixtures and
+examples, dumped through the writer before and after the rule, give zero
+differing files.
+
+The sweeps corroborate it, and are worth naming for what they actually covered:
+every `.chiplet` in the ecosystem outside build trees plus the YAML and stackups
+shipped alongside them, zero occurrences of NEL, LS and PS; the KiCad plugin's
+187 `.chiplet`, zero; 183 `.chiplet` across the umbrella tree with build trees
+included, zero lone CR and zero of the other three. All three walked committed,
+machine-written output, which is the population most likely to be clean, so they
+raise confidence and do not establish the claim on their own.
 
 ### Top-level keys are written bare
 
@@ -978,6 +1073,18 @@ to split, the documents a reader must refuse to load, and the documents whose
 document can be loadable and not splittable, splittable and not writable, and
 splittable and not loadable (a forbidden line break, where the grammar has an
 answer and the readers do not). Add a case to that file, never to a consumer.
+
+Each case in the `refuse` group carries an explicit **`refused_by`** list, one or
+both of `"splitter"` and `"reader"`. A consumer MUST filter on that field and
+MUST NOT read the group name as the verdict. The group is called `refuse` and
+says nothing about WHICH implementation refuses; it once held only splitter
+cases, and a test parametrized over the whole group therefore asserted "the
+splitter must raise" for every row in it. When reader-only rows arrived, that
+test failed on documents a splitter is right to accept. Filtering on
+`refused_by` survives both kinds of addition, and a vendored copy predating the
+field fails on a missing key, which is loud, rather than on an inverted verdict,
+which is not. The file also carries a `version`, so a stale copy can be named as
+one.
 
 ## Data Types and Constraints
 
@@ -1289,6 +1396,6 @@ components:
 | 1.0 | 2026-08-05 | Documented the optional technology `stackup` field: a path to a layer-stackup YAML the technology ships itself, resolved through the same `${VAR}`/relative chain as `layer_properties` and taking priority over a consumer's own stackup lookup for that technology id. The field was already read, written and relied on by Chiplet Studio; it had never been written down here, so the reference C++ reader dropped it on a round-trip while a consumer's vendored copy carried it. Updated the C++ reference (struct/parse/emit); the Python reader already passes it through. Backward compatible and optional; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-07-21 | Added the optional interposer `attachment_surface_z` field: the die-attachment (BEOL-top) mount plane, decoupled from `dimensions.thickness`, which now carries the physical substrate body (extending downward from the attachment surface). Backward compatible: consumers fall back to `dimensions.thickness` as the mount reference when the field is absent, so legacy files seat dies unchanged. Updated the reference readers (C++ struct/parse/emit; the Python reader already passes it through) and the canonical example. No on-disk format change; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-09-01 | Added the optional top-level `interposer` block (a single required `adapter`, the interposer-axis registry id), taking the root key count from ten to eleven. The block was already emitted by the KiCad exporter and read by the ADK DRC runner and the cockpit; it had never been written down here, so it was an undocumented root key travelling between three tools. Fixed the `adapter` value as a registry id, never a filesystem path (pattern, no `.drc` suffix), and stated the consumer rule: refuse when an adapter is needed and absent, never default silently. Added [`schemas/chiplet.schema.json`](../schemas/chiplet.schema.json), normative for structure, with the reference reader still normative for semantics; wired it into the conformance gate over the whole committed corpus, with the schema-vs-reader divergences pinned. Backward compatible and optional; `format_version` stays `"1.0"`. |
-| 1.0 | 2026-09-04 | Defined the format's line-break set as LF and CRLF, and made NEL (`U+0085`), `U+2028` and `U+2029` anywhere in a document ill-formed, refused by both reference readers on the text before any YAML parse, with the refusal naming the code point and the line. This is an INTENTIONAL behaviour change, not a regression: `name: demo<U+2028>trailing` loads today in yaml-cpp 0.8.0 and stops loading after this release, and a consumer meets that through its next vendoring bump. It is a clarification rather than a MAJOR because the format had never defined its line-break set, so those bytes were never legal; yaml-cpp accepting them was implementation behaviour that PyYAML already refused on the same bytes; and the population is zero, measured twice (a sweep of every `.chiplet` outside build trees plus the YAML and stackups shipped with them: zero occurrences of `U+2028`, `U+2029` and `U+0085`; the KiCad plugin's own sweep of 187 `.chiplet`: zero). Added the matching writer rule (escape the three inside a double-quoted scalar) and fixed the Python reference writer, which emitted them raw into a single-quoted scalar and then folded them on the next read, so the value did not survive its own round trip. No document shape changed and `format_version` stays `"1.0"`. |
+| 1.0 | 2026-09-04 | Defined the format's line-break set as LF and CRLF, and made ill-formed every character a YAML parser breaks a line on that this grammar does not: NEL (`U+0085`), `U+2028` and `U+2029` anywhere, and a CR (`U+000D`) not immediately followed by LF, end of file included. Both reference readers refuse such a document on the text before any YAML parse, with the refusal naming the code point and the line, and the set is derived by executing a parser over a code-point range rather than listed by hand. This is an INTENTIONAL behaviour change, not a regression: `name: demo<U+2028>trailing` loads today in yaml-cpp 0.8.0 and stops loading after this release, and a consumer meets that through its next vendoring bump. It is a clarification rather than a MAJOR because the format had never defined its line-break set, so those bytes were never legal; yaml-cpp accepting them was implementation behaviour that PyYAML already refused on the same bytes; and no conforming producer can write one, since the writer rule escapes them and the escaped form carries any value that needs one (measured: all 19 `.chiplet` here dumped through the writer before and after the rule give zero differing files). The sweeps corroborate rather than establish that, and they bound a corpus of committed machine-written output: zero occurrences across every `.chiplet` outside build trees plus the YAML and stackups shipped with them, zero in the KiCad plugin's 187 `.chiplet`, and zero lone CR across 183 `.chiplet` with build trees included. Added the matching writer rule (escape them inside a double-quoted scalar) and fixed the Python reference writer, which emitted them raw into a single-quoted scalar and then folded them on the next read, so the value did not survive its own round trip. No document shape changed and `format_version` stays `"1.0"`. |
 | 1.0 | 2026-09-04 | Stated who enforces a closed vocabulary, and corrected three sentences that said the wrong thing. A closed vocabulary (component `anchor`, component `orientation`, `interfaces[].type`, `io_pads[].io_class`) binds WRITERS and is enforced by [`schemas/chiplet.schema.json`](../schemas/chiplet.schema.json); the reference readers carry every one of them as the string the document wrote, report an unrecognised member on their warn channel, and refuse nothing over it, so a consumer that cannot act on a member refuses the ELEMENT that carries it. That is what keeps an addition to one of these lists a MINOR: a reader refusing the DOCUMENT would make every future addition a MAJOR for everyone downstream. Rule 4 accordingly drops the clause about refusing an unlisted type and moves TIER in the C++ reference, from the parser to the validator, which is what its own text under "Enforced by the reference validator" always said; it had lived in `parse_interface`, where `LoadOptions::validate = false` did not reach it, so the two readers loaded different documents from one file. The prose list of closed vocabularies gains `io_pads[].io_class` (it closed four, the prose named three), and the gloss saying the reference readers accepted `solder_bump` before the 1.1 stamp is gone: it stated a prohibition in terms of what a reader knows rather than what a document may carry. The `solder_bump` format MINOR is untouched and still owed at 1.1. Reader release 1.1.0 to 1.2.0; no document shape changed and `format_version` stays `"1.0"`. |
 | 1.0 | 2026-09-04 | Defined the anchor of a `die_array`, which the format had never stated (SPEC-30). `anchor` applies PER ELEMENT: `array.start_position` places the FIRST element's anchor point and every element is placed by that same anchor, so a `die_array` has one definition of `anchor` and its effect does not depend on the component's type. The gap was live rather than theoretical: the frame contract, which this document names as the source of truth for the anchor convention, defined the anchor for a component's own mesh and never mentioned `die_array` or `start_position`, so both readings of `start_position` were admissible and consumers had silently picked one, with three interposer-pnr tests declaring `gds_origin` on an array and then asserting the centre reading. A MINOR clarification that reinterprets zero existing documents: exactly two `die_array` components exist across the ecosystem, and the other declares no anchor, so `conformance/fixtures/v1_0_all_blocks.chiplet` moves from `gds_origin` to `bbox_center` in the same commit rather than have its meaning restated after the fact. No document shape changed and `format_version` stays `"1.0"`. |

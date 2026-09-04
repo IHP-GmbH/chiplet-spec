@@ -128,22 +128,40 @@ IO_CLASS_INTERFACE_TYPES = {
 }
 
 
-#: The three code points a YAML 1.1 parser breaks lines on and a YAML 1.2 parser
-#: does not, mapped to the name a refusal quotes. They are the format's one
-#: text-level ill-formedness besides a repeated top-level key, and for the same
-#: reason: PyYAML (YAML 1.1) and yaml-cpp (YAML 1.2) build DIFFERENT documents
-#: out of the same bytes, so no reading of them is conforming. Measured, both
-#: directions, on PyYAML 6.0.3 and yaml-cpp 0.8.0: with `name: demo<LS>` followed
-#: by `format_version: "9.0"`, PyYAML reads a second top-level key and returns
-#: format_version '9.0' while yaml-cpp throws "illegal map value"; with the same
-#: separator followed by ordinary text, yaml-cpp loads the three bytes inside the
-#: scalar and PyYAML throws a ScannerError. Neither reader can be made to imitate
-#: the other, so the format refuses the bytes instead.
+#: The code points a YAML parser breaks a line on and THIS GRAMMAR does not,
+#: mapped to the name a refusal quotes. That criterion is what GENERATES the set,
+#: and it is executable: conformance/test_top_level_blocks.py derives the members
+#: by running PyYAML over U+0000..U+21FF instead of trusting this list, because a
+#: hand-written derived list is exactly how CR came to be missing from it for one
+#: release. The grammar is what SPEC-14's repeated-key scan, flow rule 4,
+#: top_level_blocks() and every splitting host read, so a character that moves a
+#: line for the parser and not for the grammar hides a top-level key from all of
+#: them at once.
+#:
+#: For these three, membership is unconditional. CR is the fourth member and the
+#: only conditional one, so it is kept out of this mapping and checked on its own:
+#: CRLF is the format's other line break, so a CR is ill-formed exactly when the
+#: byte after it is not LF. Every consumer of the mapping below means "anywhere".
+#:
+#: Measured in both directions on PyYAML 6.0.3 and yaml-cpp 0.8.0: with
+#: `name: demo<LS>` followed by `format_version: "9.0"`, PyYAML reads a second
+#: top-level key and returns format_version '9.0' while yaml-cpp throws "illegal
+#: map value"; with the same separator followed by ordinary text, yaml-cpp loads
+#: the bytes inside the scalar and PyYAML throws a ScannerError. CR behaves the
+#: same way in both shapes, except that yaml-cpp folds it to a space rather than
+#: keeping it, so neither reader can be made to imitate the other and the format
+#: refuses the bytes instead.
 _FORBIDDEN_LINE_BREAKS = {
     "\u0085": "Unicode next line",
     "\u2028": "Unicode line separator",
     "\u2029": "Unicode paragraph separator",
 }
+
+#: The conditional fourth member. Not in the mapping above, and not because CR is
+#: a lesser defect: it has the WIDEST blast radius of the four, since a CR is one
+#: keystroke away from every editor and every CRLF file that lost half a
+#: terminator in transit.
+_CARRIAGE_RETURN = "\r"
 
 
 class ChipletFormatError(ValueError):
@@ -450,21 +468,48 @@ def _apply_write_version(out: Dict[str, Any]) -> None:
 
 
 def _check_line_breaks(text: str) -> None:
-    """Refuse a document carrying NEL, U+2028 or U+2029, before any YAML parse.
+    """Refuse a document whose line breaks are not LF or CRLF, before any parse.
 
     The format's line breaks are LF and CRLF (docs/CHIPLET_FORMAT_SPEC.md, "Line
-    breaks"). This runs on the TEXT, ahead of ``yaml.safe_load``, for the same
-    reason the repeated-key scan does: once a parser has been over the bytes the
-    evidence is gone, and here the two reference parsers do not even agree on
-    what the bytes are. The refusal names the code point and the line, because
-    all three are invisible in an editor and a bare "invalid document" would send
-    the author looking at the wrong thing.
+    breaks"). A character a YAML parser breaks a line on and this grammar does
+    not is ill-formed, because the grammar is what SPEC-14's repeated-key scan,
+    flow rule 4 and every splitting host read: the parser sees a top-level key
+    none of them can. Four characters qualify, and they are DERIVED rather than
+    listed (conformance/test_top_level_blocks.py runs PyYAML over a code-point
+    range and asserts this reader refuses exactly what it finds): NEL, LS and PS
+    anywhere, and CR unless an LF follows it immediately.
+
+    This runs on the TEXT, ahead of ``yaml.safe_load``, for the same reason the
+    repeated-key scan does: once a parser has been over the bytes the evidence is
+    gone, and here the two reference parsers do not even agree on what the bytes
+    are. The refusal names the code point and the line, because all four are
+    invisible in an editor and a bare "invalid document" would send the author
+    looking at the wrong thing.
+
+    A CR at END OF FILE with no LF after it is refused too. That case is decided
+    in the spec rather than left to the line splitter, which pops a trailing CR
+    whether or not an LF follows and would therefore read one byte less than the
+    file holds without saying so.
     """
     line = 1
-    for ch in text:
+    last = len(text) - 1
+    for index, ch in enumerate(text):
         if ch == "\n":
             line += 1
             continue
+        if ch == _CARRIAGE_RETURN:
+            if index < last and text[index + 1] == "\n":
+                continue
+            raise ChipletFormatError(
+                f"line {line}: carriage return (U+000D) not followed by LF. A "
+                f"document's line breaks are LF and CRLF, so a CR is legal only "
+                f"as the first byte of a CRLF, end of file included. PyYAML "
+                f"6.0.3 and yaml-cpp 0.8.0 both break a line on a lone CR and "
+                f"this grammar does not, so a top-level key written after one is "
+                f"invisible to every consumer that splits the text on LF, this "
+                f"reader's own repeated-key scan included. Escape it in a "
+                f"double-quoted scalar (\\r) "
+                f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
         name = _FORBIDDEN_LINE_BREAKS.get(ch)
         if name is None:
             continue
@@ -662,9 +707,10 @@ def loads(text: str, *, allow_intermediate: bool = False, validate: bool = True,
     invalid, and is read normally (see :func:`top_level_blocks` and flow rule 1).
 
     Refuses, for the same reason and ahead of the YAML parse rather than after
-    it, a document carrying NEL (U+0085), U+2028 or U+2029 anywhere: those are
-    line breaks to a YAML 1.1 parser and ordinary characters to a YAML 1.2 one
-    (see :func:`_check_line_breaks`). It runs FIRST because on such a document
+    it, a document whose line breaks are not LF or CRLF: NEL (U+0085), U+2028 or
+    U+2029 anywhere, and a CR not immediately followed by LF. A YAML parser
+    breaks a line on each of them and this grammar does not (see
+    :func:`_check_line_breaks`). It runs FIRST because on such a document
     ``yaml.safe_load`` either raises with a parser message that says nothing
     about the real defect or, worse, returns a document with a top-level key
     that is not in the file.
@@ -727,6 +773,14 @@ def dumps(data: Dict[str, Any], *, validate: bool = True,
     )
 
 
+#: What a scalar may not carry raw on the way OUT: the reader's set with CR
+#: added unconditionally. The reader can afford CR's condition because it sees
+#: the next byte; a writer cannot, since whether an LF follows the CR it just
+#: wrote depends on where in the value it sits, and "it usually does" is not a
+#: writer rule.
+_ESCAPE_IN_SCALARS = tuple(_FORBIDDEN_LINE_BREAKS) + (_CARRIAGE_RETURN,)
+
+
 class _CanonicalDumper(yaml.SafeDumper):
     """SafeDumper that never emits a forbidden line break as a raw character.
 
@@ -737,12 +791,17 @@ class _CanonicalDumper(yaml.SafeDumper):
     scalars puts the emitter on the path where it already writes ``\\N``, ``\\L``
     and ``\\P``, so the value round-trips and the bytes on disk are a document
     this reader still accepts.
+
+    CR is in the trigger set too, and is the one member the emitter already gets
+    right on its own (measured on PyYAML 6.0.3: ``{'name': 'demo<CR>x'}`` comes
+    out as ``"demo\\rx"`` with no help). It is asserted by the same test as the
+    other three rather than assumed, because that is a fact about a version.
     """
 
 
 def _represent_str(dumper: yaml.SafeDumper, data: str) -> Any:
     tag = "tag:yaml.org,2002:str"
-    if any(ch in data for ch in _FORBIDDEN_LINE_BREAKS):
+    if any(ch in data for ch in _ESCAPE_IN_SCALARS):
         return dumper.represent_scalar(tag, data, style='"')
     return dumper.represent_scalar(tag, data)
 
