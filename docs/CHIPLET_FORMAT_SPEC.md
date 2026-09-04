@@ -335,6 +335,17 @@ array:
     z: <float>             # First element Z position
 ```
 
+`start_position` is a `position3d`, the same object as `position`, and `anchor:`
+governs it the same way, because the anchor applies **per element**:
+`start_position` places the FIRST element's anchor point, and every element of
+the array is placed by that same anchor, `pitch.x` / `pitch.y` apart. A
+`die_array` with `anchor: gds_origin` therefore has element (i, j)'s own GDS
+(0, 0) at `start_position + (i * pitch.x, j * pitch.y)`; with `bbox_center` the
+same holds of each element's bbox centre. There is one definition of `anchor`
+and its effect does not depend on the component's type (see
+[`coord_frame_contract.md`](./coord_frame_contract.md) section 2.1, which
+governs).
+
 ### Coordinate frame, anchor, and z-mounting (normative)
 
 The geometry fields above (`position`, `anchor`, `connection`, and the nested
@@ -360,7 +371,9 @@ Summary of what the contract fixes:
   `gds_origin` (mesh built around the component's own GDS (0,0); used by dies)
   or `bbox_center` (mesh centered on the component's GDS bbox; used by
   interposers). New files MUST declare it; readers default to `bbox_center`
-  and warn when it is absent.
+  and warn when it is absent. It applies PER ELEMENT, so on a `die_array` it
+  governs `array.start_position` (the first element's anchor point) and every
+  element after it, and its meaning never depends on the component's type.
 - **`connection:`** selects a die's interconnect method (an id in
   `interconnect_methods.json`). Z-mounting is per-die:
   `z_die = mounting_surface + connection.total_height()`, so one assembly can
@@ -1278,3 +1291,4 @@ components:
 | 1.0 | 2026-09-01 | Added the optional top-level `interposer` block (a single required `adapter`, the interposer-axis registry id), taking the root key count from ten to eleven. The block was already emitted by the KiCad exporter and read by the ADK DRC runner and the cockpit; it had never been written down here, so it was an undocumented root key travelling between three tools. Fixed the `adapter` value as a registry id, never a filesystem path (pattern, no `.drc` suffix), and stated the consumer rule: refuse when an adapter is needed and absent, never default silently. Added [`schemas/chiplet.schema.json`](../schemas/chiplet.schema.json), normative for structure, with the reference reader still normative for semantics; wired it into the conformance gate over the whole committed corpus, with the schema-vs-reader divergences pinned. Backward compatible and optional; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-09-04 | Defined the format's line-break set as LF and CRLF, and made NEL (`U+0085`), `U+2028` and `U+2029` anywhere in a document ill-formed, refused by both reference readers on the text before any YAML parse, with the refusal naming the code point and the line. This is an INTENTIONAL behaviour change, not a regression: `name: demo<U+2028>trailing` loads today in yaml-cpp 0.8.0 and stops loading after this release, and a consumer meets that through its next vendoring bump. It is a clarification rather than a MAJOR because the format had never defined its line-break set, so those bytes were never legal; yaml-cpp accepting them was implementation behaviour that PyYAML already refused on the same bytes; and the population is zero, measured twice (a sweep of every `.chiplet` outside build trees plus the YAML and stackups shipped with them: zero occurrences of `U+2028`, `U+2029` and `U+0085`; the KiCad plugin's own sweep of 187 `.chiplet`: zero). Added the matching writer rule (escape the three inside a double-quoted scalar) and fixed the Python reference writer, which emitted them raw into a single-quoted scalar and then folded them on the next read, so the value did not survive its own round trip. No document shape changed and `format_version` stays `"1.0"`. |
 | 1.0 | 2026-09-04 | Stated who enforces a closed vocabulary, and corrected three sentences that said the wrong thing. A closed vocabulary (component `anchor`, component `orientation`, `interfaces[].type`, `io_pads[].io_class`) binds WRITERS and is enforced by [`schemas/chiplet.schema.json`](../schemas/chiplet.schema.json); the reference readers carry every one of them as the string the document wrote, report an unrecognised member on their warn channel, and refuse nothing over it, so a consumer that cannot act on a member refuses the ELEMENT that carries it. That is what keeps an addition to one of these lists a MINOR: a reader refusing the DOCUMENT would make every future addition a MAJOR for everyone downstream. Rule 4 accordingly drops the clause about refusing an unlisted type and moves TIER in the C++ reference, from the parser to the validator, which is what its own text under "Enforced by the reference validator" always said; it had lived in `parse_interface`, where `LoadOptions::validate = false` did not reach it, so the two readers loaded different documents from one file. The prose list of closed vocabularies gains `io_pads[].io_class` (it closed four, the prose named three), and the gloss saying the reference readers accepted `solder_bump` before the 1.1 stamp is gone: it stated a prohibition in terms of what a reader knows rather than what a document may carry. The `solder_bump` format MINOR is untouched and still owed at 1.1. Reader release 1.1.0 to 1.2.0; no document shape changed and `format_version` stays `"1.0"`. |
+| 1.0 | 2026-09-04 | Defined the anchor of a `die_array`, which the format had never stated (SPEC-30). `anchor` applies PER ELEMENT: `array.start_position` places the FIRST element's anchor point and every element is placed by that same anchor, so a `die_array` has one definition of `anchor` and its effect does not depend on the component's type. The gap was live rather than theoretical: the frame contract, which this document names as the source of truth for the anchor convention, defined the anchor for a component's own mesh and never mentioned `die_array` or `start_position`, so both readings of `start_position` were admissible and consumers had silently picked one, with three interposer-pnr tests declaring `gds_origin` on an array and then asserting the centre reading. A MINOR clarification that reinterprets zero existing documents: exactly two `die_array` components exist across the ecosystem, and the other declares no anchor, so `conformance/fixtures/v1_0_all_blocks.chiplet` moves from `gds_origin` to `bbox_center` in the same commit rather than have its meaning restated after the fact. No document shape changed and `format_version` stays `"1.0"`. |

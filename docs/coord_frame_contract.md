@@ -199,6 +199,23 @@ The anchor is **declared by the writer** based on knowledge of how
 the component's GDS was produced. The reader does **not** infer it
 from `ComponentType`.
 
+The anchor applies **per element**, and that sentence is the whole rule. For an
+ordinary component there is one element and `position:` places its anchor point.
+For a `die_array` there are `count.x * count.y` elements of the same cell:
+`array.start_position` places the FIRST element's anchor point, and every element
+is placed by the SAME anchor, `pitch.x` / `pitch.y` apart. So a `die_array` with
+`anchor: gds_origin` has its first element's GDS (0, 0) at `start_position` and
+the element at index (i, j) has its GDS (0, 0) at
+`start_position + (i * pitch.x, j * pitch.y)`; with `anchor: bbox_center` the
+same is true of each element's bbox center.
+
+`start_position` is the same `position3d` as `position` (the schema declares it
+by `$ref` to that definition), and the rule above attaches to that definition,
+which is why it needs no separate table row. It is also why the anchor's meaning
+must NOT depend on the component's type: a field whose effect changes with the
+type it sits on is the defect this contract exists to prevent, and `anchor` is
+the field the readers agree on least when it does.
+
 ### 2.2 Default behavior
 
 If `anchor:` is absent:

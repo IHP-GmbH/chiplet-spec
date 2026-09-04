@@ -100,8 +100,17 @@ components:
 
   - id: MEM
     type: die_array
-    technology: sg13g2
-    anchor: gds_origin
+    # bbox_center, and the change from gds_origin belongs to the SPEC-30 ruling
+    # rather than to this file's coverage. The anchor applies per element and
+    # start_position places the first element's anchor point, which is a rule the
+    # format had never written down: the contract defined the anchor for a
+    # component's own mesh and never mentioned die_array or start_position. Two
+    # die_array components exist in the whole ecosystem, this one and a studio
+    # fixture that declares no anchor, so settling the rule reinterprets exactly
+    # zero documents ONLY if this one moves in the same commit. It is fixture
+    # data with no reason to be gds_origin, so it moves and the clarification
+    # stays a MINOR instead of quietly restating what an existing file meant.
+    anchor: bbox_center
     orientation: face_up
     connection: cupillar_opt1
     layout: ./gds/mem.gds

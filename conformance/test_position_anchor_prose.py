@@ -134,3 +134,67 @@ def test_the_closed_vocabulary_list_in_the_prose_is_complete():
     for vocabulary in ("`anchor`", "`orientation`", "`interfaces[].type`",
                        "`io_pads[].io_class`"):
         assert vocabulary in section, vocabulary
+
+
+def test_the_anchor_rule_covers_a_die_array():
+    """SPEC-30: `anchor` applies per element, including inside a `die_array`.
+
+    The gap this closes was invisible in exactly the way the position one was.
+    The frame contract, which the spec names as the source of truth for the
+    anchor convention, defined the anchor for a component's own mesh and never
+    mentioned `die_array` or `array.start_position`, so both readings of
+    `start_position` (the first element's centre, or its GDS origin) were
+    admissible and consumers had silently picked one. Three interposer-pnr tests
+    declared `anchor: gds_origin` on an array and then asserted the CENTRE
+    reading, so fixture data had promoted one reading to a specification nobody
+    wrote.
+
+    Option (a) is the only reading under which `anchor` keeps ONE definition:
+    `start_position` is a `$ref` to the same `position3d` as `position`, and the
+    contract's rule attaches to that definition. The alternative would make
+    `anchor` the one field whose effect depends on the component's type.
+
+    What a green here does NOT cover (META-2): whether any reader implements it.
+    This compares documents. interposer-pnr's own warning on an array declaring
+    `gds_origin` is untouched by this commit and is that repository's row.
+    """
+    for token in ("per element", "start_position"):
+        assert token in CONTRACT, token
+    anchor_section = CONTRACT.split("### 2.1 The `anchor:` field", 1)[1].split(
+        "### 2.2", 1)[0]
+    assert "start_position` places the FIRST element's anchor point" \
+        in anchor_section
+    assert "die_array" in anchor_section
+    # And the spec's own array section carries it, because that is where a
+    # writer of an array looks and it must not have to find the contract first.
+    array_section = SPEC.split(
+        "### Array Configuration (for `die_array` type)", 1)[1].split(
+            "### Coordinate frame", 1)[0]
+    assert "anchor" in array_section and "per element" in array_section
+
+
+def test_no_committed_document_declares_gds_origin_on_an_array():
+    """The compatibility half of the ruling, kept executable.
+
+    With the population at two (this repository's all-blocks fixture and a studio
+    fixture that declares no anchor), the clarification reinterprets zero
+    documents. That is only true while it stays true: a fixture that declares
+    `gds_origin` on a `die_array` would be a document whose meaning the ruling
+    changed after the fact, and the right response is to decide that on purpose
+    rather than to discover it.
+    """
+    import yaml
+    corpus = sorted((ROOT / "conformance" / "fixtures").glob("*.chiplet")) + \
+        sorted((ROOT / "examples").glob("*.chiplet"))
+    offenders = []
+    for path in corpus:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(doc, dict):
+            continue
+        for comp in doc.get("components") or []:
+            if not isinstance(comp, dict):
+                continue
+            if comp.get("type") == "die_array" and \
+                    comp.get("anchor") == "gds_origin":
+                offenders.append(f"{path.name}:{comp.get('id')}")
+    assert not offenders, offenders
