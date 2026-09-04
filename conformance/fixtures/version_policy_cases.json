@@ -1,8 +1,5 @@
 {
   "_comment": [
-    "SPDX-License-Identifier: Apache-2.0",
-    "SPDX-FileCopyrightText: 2026 IHP GmbH",
-    "",
     "The version policy's verdict oracle (docs/VERSION_POLICY.md). One file, two",
     "readers: conformance/test_version_policy.py runs every row through the",
     "Python check_contract_version and reference/cpp/tests runs every row it can",
