@@ -38,8 +38,9 @@ NOT_DELIMITABLE = CASES["not_delimitable"]
 #: a quoted key at column zero is a valid document nobody can split; a repeated
 #: top-level key is a document no reader may read AND no splitter may attribute;
 #: a forbidden line break is a document no reader may read while the splitter has
-#: a perfectly good answer for it (those bytes are not line breaks, so no block
-#: starts there), which is why the grammar case for it stays under splits.
+#: a perfectly good answer for it (those bytes are not line breaks to the grammar,
+#: so no block starts there), which is why the grammar case for it stays under
+#: splits.
 NOT_SPLITTABLE = [c for c in REFUSE if c["kind"] == "quoted_key_at_column_zero"]
 ILL_FORMED = [c for c in REFUSE if c["kind"] == "repeated_top_level_key"]
 FORBIDDEN_LINE_BREAK = [c for c in REFUSE if c["kind"] == "forbidden_line_break"]
@@ -51,6 +52,20 @@ SPLITTER_REFUSES = NOT_SPLITTABLE + ILL_FORMED
 
 #: Every case that must be refused at LOAD, whatever a splitter does with it.
 READER_REFUSES = ILL_FORMED + FORBIDDEN_LINE_BREAK
+
+#: The code points the oracle refuses, read off the file. Every test that used
+#: to spell them out reads this instead.
+FORBIDDEN_CODE_POINTS = sorted({c["code_point"] for c in FORBIDDEN_LINE_BREAK})
+
+#: The escape each code point is written as by the PyYAML emitter. A spelling,
+#: not a set: the members come from the oracle above and a code point that turns
+#: up here without an entry fails the writer test rather than skipping it.
+_ESCAPES = {"U+000D": "\\r", "U+0085": "\\N", "U+2028": "\\L", "U+2029": "\\P"}
+
+#: The range the forbidden set is DERIVED over. It runs past the last character
+#: any YAML 1.1 parser calls a line break (U+2029) with room to spare, and the
+#: sweep costs a fraction of a second.
+_DERIVATION_RANGE = range(0x0000, 0x2200)
 
 #: A quoted key at column zero, in the spelling the refuse cases must carry.
 _QUOTED_KEY = re.compile(r'^(?:"[^"]*"|\'[^\']*\'):(?:\s.*)?\Z')
@@ -83,14 +98,16 @@ def test_oracle_is_wellformed():
     assert NOT_SPLITTABLE and ILL_FORMED and FORBIDDEN_LINE_BREAK
     assert (len(NOT_SPLITTABLE) + len(ILL_FORMED)
             + len(FORBIDDEN_LINE_BREAK)) == len(REFUSE)
-    # Both shapes of the line-break disagreement, for each of the three code
-    # points. One shape alone certifies one direction of a parity break that
-    # runs both ways: the smuggle is refused by yaml-cpp and read by PyYAML, and
-    # the plain-scalar one is read by yaml-cpp and refused by PyYAML.
-    for code_point in ("U+0085", "U+2028", "U+2029"):
+    # Both shapes of the disagreement, for EVERY code point in the set, and the
+    # set is read off the file rather than named here: naming it here is how the
+    # rule shipped with three of its four members. One shape alone certifies one
+    # direction of a break that runs both ways: the smuggle is refused by
+    # yaml-cpp and read by PyYAML, and the plain-scalar one is read by yaml-cpp
+    # and refused by PyYAML.
+    for code_point in FORBIDDEN_CODE_POINTS:
         shapes = [c["name"] for c in FORBIDDEN_LINE_BREAK
                   if c["code_point"] == code_point]
-        assert len(shapes) == 2, code_point
+        assert len(shapes) >= 2, code_point
         assert any(n.endswith("_smuggles_a_top_level_key") for n in shapes)
         assert any(n.endswith("_inside_a_plain_scalar") for n in shapes)
 
@@ -280,20 +297,23 @@ def test_the_grammar_still_does_not_break_a_line_on_a_separator():
     assert "U+2028" in str(excinfo.value)
 
 
-@pytest.mark.parametrize("case", FORBIDDEN_LINE_BREAK, ids=lambda c: c["name"])
-def test_the_writer_escapes_what_the_reader_refuses(case):
+@pytest.mark.parametrize("code_point", FORBIDDEN_CODE_POINTS)
+def test_the_writer_escapes_what_the_reader_refuses(code_point):
     # The writer rule, and it is not decoration: yaml.safe_dump(allow_unicode)
-    # writes these three raw into a SINGLE-quoted scalar, and PyYAML then folds
-    # its own output on the way back in, so the value did not survive a round
-    # trip through the reference writer. Escaped in a double-quoted scalar it
-    # does, and the bytes on disk are a document this reader still accepts.
-    char = chr(int(case["code_point"][2:], 16))
+    # writes NEL, LS and PS raw into a SINGLE-quoted scalar, and PyYAML then
+    # folds its own output on the way back in, so the value did not survive a
+    # round trip through the reference writer. Escaped in a double-quoted scalar
+    # it does, and the bytes on disk are a document this reader still accepts.
+    # CR is the member the emitter already escaped on its own; it is asserted
+    # here on the same terms rather than trusted, because "the emitter does it"
+    # is a fact about a version.
+    assert code_point in _ESCAPES, \
+        code_point + " has no escape spelling; add one rather than skip it"
+    char = chr(int(code_point[2:], 16))
     doc = {"format_version": "1.0", "assembly": {"name": "demo" + char + "x"}}
     text = cfio.dumps(doc)
     assert char not in text
-    escape = {"U+0085": "\\N", "U+2028": "\\L", "U+2029": "\\P"}[
-        case["code_point"]]
-    assert escape in text
+    assert _ESCAPES[code_point] in text
     assert cfio.loads(text)["assembly"]["name"] == "demo" + char + "x"
 
 
@@ -304,3 +324,102 @@ def test_a_flow_block_the_grammar_cannot_delimit_splits_without_a_flow_key(case)
     # NotDelimitable, dumps() throws). This reader's dumps() re-emits from the
     # dict and never claimed byte-exactness, so there is nothing here to refuse.
     assert "flow" not in cfio.top_level_blocks(case["doc"])
+
+
+# --- (c) the floor guard: the set is DERIVED, never written down -----------
+def _smuggle_document(char):
+    """The shape the whole rule exists for: a top-level key hidden behind CHAR.
+
+    One line to the LF-only grammar, two to a parser that breaks on ``char``.
+    """
+    return "a: demo" + char + "b: 2\n"
+
+
+def _content_document(char):
+    """The control shape: the same separator with no key hiding behind it."""
+    return "a: demo" + char + "tail\n"
+
+
+def test_the_forbidden_set_is_derived_from_the_parser_and_not_written_down():
+    # META-4, and the reason this test exists: the set was carried by hand from
+    # a four-member finding into a three-member constant, and every green in the
+    # repository stayed green because every one of them read the constant. So
+    # nothing here reads it. The criterion is EXECUTED over a code-point range:
+    # a character PyYAML breaks a line on that the grammar reads as content
+    # smuggles a top-level key past top_level_blocks, past the repeated-key scan
+    # and past every ownership guard built on either.
+    import yaml  # noqa: PLC0415  (only the derivation needs the raw parser)
+
+    smuggles, refused = set(), set()
+    ordinary = 0
+    for code_point in _DERIVATION_RANGE:
+        char = chr(code_point)
+        if char == "\n":
+            continue
+        smuggle = _smuggle_document(char)
+        try:
+            cfio._check_line_breaks(smuggle)
+        except cfio.ChipletFormatError:
+            refused.add(char)
+        try:
+            data = yaml.safe_load(smuggle)
+        except yaml.YAMLError:
+            data = None
+        if isinstance(data, dict) and "b" in data \
+                and list(cfio.top_level_blocks(smuggle)) == ["a"]:
+            smuggles.add(char)
+        try:
+            value = yaml.safe_load(_content_document(char))["a"]
+        except yaml.YAMLError:
+            value = None
+        if isinstance(value, str) and char in value:
+            ordinary += 1
+
+    # The probe is not vacuous in either direction: it finds smugglers, and the
+    # overwhelming majority of the range is ordinary content to both readings.
+    assert smuggles, "the derivation found nothing, so the probe is broken"
+    assert ordinary > 8000, ordinary
+    # The reader refuses exactly what the parser smuggles. Not a superset, which
+    # would refuse documents nobody can attack with, and not a subset, which is
+    # the defect this test was written for.
+    assert refused == smuggles, {
+        "refused, not smuggled": sorted("U+%04X" % ord(c)
+                                        for c in refused - smuggles),
+        "smuggled, not refused": sorted("U+%04X" % ord(c)
+                                        for c in smuggles - refused),
+    }
+    # And the oracle every other implementation runs names the same set.
+    assert FORBIDDEN_CODE_POINTS == sorted("U+%04X" % ord(c) for c in smuggles)
+
+
+def test_crlf_survives_the_carriage_return_rule():
+    # CR is the one conditional member, so the rule has to be measured from both
+    # sides on a real document: a CRLF file is ordinary and loses nothing, and
+    # the same file with a single LF taken out of a terminator is refused. The
+    # split verdict for a CRLF document is asserted elsewhere; this is the load.
+    case = next(c for c in SPLITS if "crlf" in c["name"])
+    assert "\r\n" in case["doc"]
+    assert cfio.loads(case["doc"])["assembly"]["name"] == "demo"
+    broken = case["doc"].replace("\r\n", "\r", 1)
+    with pytest.raises(cfio.ChipletFormatError) as excinfo:
+        cfio.loads(broken)
+    assert "U+000D" in str(excinfo.value), str(excinfo.value)
+    assert "line 1" in str(excinfo.value), str(excinfo.value)
+
+
+def test_a_carriage_return_at_end_of_file_is_refused_by_decision():
+    # The case the spec decides rather than inherits. Both parsers agree here
+    # (they drop the CR), so nothing forces the refusal; what forces it is that
+    # the rule stays one property of the bytes, and that both line splitters pop
+    # a trailing CR whether or not an LF follows, so accepting the document means
+    # reading a byte less than the file holds and never saying so.
+    case = next(c for c in FORBIDDEN_LINE_BREAK
+                if c["name"] == "carriage_return_at_end_of_file")
+    assert case["doc"].endswith("\r")
+    with pytest.raises(cfio.ChipletFormatError) as excinfo:
+        cfio.loads(case["doc"])
+    assert "end of file" in str(excinfo.value), str(excinfo.value)
+    # The line splitter's own view, which is what the decision is about: it pops
+    # the CR, so the grammar reads a line the file does not literally end with.
+    assert list(cfio.top_level_blocks(case["doc"])) == ["format_version",
+                                                        "assembly"]
