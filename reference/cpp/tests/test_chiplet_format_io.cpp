@@ -594,6 +594,52 @@ void test_forbidden_line_breaks_are_refused_with_a_text_level_reason() {
     }
 }
 
+// The splits group's LOAD verdict, both halves of it. "loadable": false is an
+// OBLIGATION to refuse and its absence an obligation to load; as a permission
+// ("no reader is required to load this") it let a row claim a refusal that never
+// happened while every test stayed green, and it let a forbidden-character case
+// be parked under splits where no load verdict would ever reach it.
+void test_the_splits_load_verdict_is_executed_both_ways() {
+    const YAML::Node& oracle = block_oracle();
+    int loading = 0, refusing = 0;
+    cfio::LoadOptions opts;
+    opts.validate = false;
+    for (const auto& c : oracle["splits"]) {
+        const std::string name = c["name"].as<std::string>();
+        const std::string doc = c["doc"].as<std::string>();
+        const bool loadable = !c["loadable"] || c["loadable"].as<bool>();
+        if (loadable) {
+            ++loading;
+            check_no_throw([&] { cfio::loads(doc, opts); },
+                           name + ": no load flag, so it loads");
+        } else {
+            ++refusing;
+            check_throws([&] { cfio::loads(doc, opts); },
+                         name + ": flagged, so it is refused at load");
+        }
+    }
+    check(loading > 0 && refusing > 0,
+          "both halves of the splits load flag are exercised");
+
+    // The way out of the line-break rule, and the control that tells a rule from
+    // a blanket ban: the refusal is on the RAW bytes, so the escaped spelling
+    // loads and carries the value.
+    for (const auto& c : oracle["splits"]) {
+        if (c["name"].as<std::string>() !=
+            "escaped_line_break_in_a_double_quoted_scalar_is_ordinary_text") {
+            continue;
+        }
+        const std::string doc = c["doc"].as<std::string>();
+        check(doc.find("\xE2\x80\xA8") == std::string::npos,
+              "the control carries no raw code point");
+        cfio::ChipletDocument parsed;
+        check_no_throw([&] { parsed = cfio::loads(doc); },
+                       "the escaped spelling loads");
+        check(parsed.assembly.name == "demo\xE2\x80\xA8x",
+              "and carries U+2028 in the value");
+    }
+}
+
 // CR is the conditional member, so it is measured from both sides on a real
 // document rather than only through the refuse rows: a CRLF file is ordinary,
 // and the same file with one LF taken out of a terminator is refused. Without
@@ -1197,6 +1243,7 @@ int main() {
     test_quoted_key_at_column_zero_loads_and_may_refuse_to_write();
     test_forbidden_line_breaks_are_refused_with_a_text_level_reason();
     test_crlf_survives_the_carriage_return_rule();
+    test_the_splits_load_verdict_is_executed_both_ways();
     test_the_writer_escapes_what_the_reader_refuses();
     test_flow_block_the_grammar_cannot_delimit_loads_but_does_not_write();
     test_hand_built_flow_value_without_a_key_line_still_emits();

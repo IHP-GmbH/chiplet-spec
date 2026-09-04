@@ -60,8 +60,8 @@ READER_REFUSES = [c for c in REFUSE if "reader" in c["refused_by"]]
 #: The cases a splitter refuses and a reader still reads: the asymmetry itself.
 SPLITTER_ONLY = [c for c in REFUSE if c["refused_by"] == ["splitter"]]
 
-#: The floor under each of the three lists above. A filter that quietly empties
-#: out takes its whole parametrized test with it and leaves a green run behind.
+#: The floor under each of the derived lists. A filter that quietly empties out
+#: takes its whole parametrized test with it and leaves a green run behind.
 assert SPLITTER_REFUSES and READER_REFUSES and SPLITTER_ONLY
 
 #: The code points the oracle refuses, read off the file. Every test that used
@@ -77,6 +77,14 @@ _ESCAPES = {"U+000D": "\\r", "U+0085": "\\N", "U+2028": "\\L", "U+2029": "\\P"}
 #: any YAML 1.1 parser calls a line break (U+2029) with room to spare, and the
 #: sweep costs a fraction of a second.
 _DERIVATION_RANGE = range(0x0000, 0x2200)
+
+#: The two halves of the splits group's load verdict, each with its floor guard
+#: below. "loadable": false is an OBLIGATION to refuse, not a permission to skip:
+#: as a permission it let one row claim a refusal that never happened, with every
+#: test green, which is the same overloading "refused_by" fixes one field along.
+SPLITS_LOAD = [c for c in SPLITS if c.get("loadable", True)]
+SPLITS_REFUSED = [c for c in SPLITS if not c.get("loadable", True)]
+assert SPLITS_LOAD and SPLITS_REFUSED
 
 #: A quoted key at column zero, in the spelling the refuse cases must carry.
 _QUOTED_KEY = re.compile(r'^(?:"[^"]*"|\'[^\']*\'):(?:\s.*)?\Z')
@@ -449,3 +457,49 @@ def test_a_carriage_return_at_end_of_file_is_refused_by_decision():
     # the CR, so the grammar reads a line the file does not literally end with.
     assert list(cfio.top_level_blocks(case["doc"])) == ["format_version",
                                                         "assembly"]
+
+
+# --- (d) the splits group's load verdict, which nothing used to check ------
+@pytest.mark.parametrize("case", SPLITS_LOAD, ids=lambda c: c["name"])
+def test_a_splits_case_without_the_flag_loads(case):
+    # The half that was missing. Nothing asserted that a splits case WITHOUT
+    # "loadable": false loads, so the flag was documentation: a future
+    # forbidden-character case could be parked under splits and never meet a
+    # load verdict at all, and one row already claimed a refusal that does not
+    # happen. Both halves are executed now.
+    assert cfio.loads(case["doc"], validate=False)
+
+
+@pytest.mark.parametrize("case", SPLITS_REFUSED, ids=lambda c: c["name"])
+def test_a_splits_case_with_the_flag_is_refused(case):
+    # And the flag means refused, in both readers, not "not required to load".
+    with pytest.raises(cfio.ChipletFormatError):
+        cfio.loads(case["doc"], validate=False)
+
+
+def test_the_escaped_spelling_is_the_way_out_and_it_loads():
+    # The discriminating control for the whole line-break rule: the refusal is on
+    # the RAW bytes, so a value that genuinely needs one of these characters is
+    # written escaped and nothing is lost. Without a case that LOADS, the rule
+    # and a blanket ban on the character look the same from the outside.
+    case = next(c for c in SPLITS if c["name"] ==
+                "escaped_line_break_in_a_double_quoted_scalar_is_ordinary_text")
+    assert "\u2028" not in case["doc"], "the control must carry no raw character"
+    assert "\\L" in case["doc"]
+    assert cfio.loads(case["doc"])["assembly"]["name"] == "demo\u2028x"
+    # And the grammar reads it as ordinary text: the escape is two characters to
+    # everything that splits on LF, which is the whole reason it is the way out.
+    assert list(cfio.top_level_blocks(case["doc"])) == [b["key"]
+                                                        for b in case["blocks"]]
+
+
+@pytest.mark.parametrize("code_point", FORBIDDEN_CODE_POINTS)
+def test_every_refused_character_has_a_legal_escaped_spelling(code_point):
+    # The way out exists for each member, not just the one the oracle carries as
+    # a document. A refusal with no way out would push a producer to drop the
+    # value, which is the data loss these rules exist to prevent.
+    char = chr(int(code_point[2:], 16))
+    doc = 'format_version: "1.0"\nassembly:\n  name: "demo%sx"\n' % _ESCAPES[
+        code_point]
+    assert char not in doc
+    assert cfio.loads(doc)["assembly"]["name"] == "demo" + char + "x"

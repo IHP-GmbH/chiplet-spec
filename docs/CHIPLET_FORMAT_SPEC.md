@@ -921,6 +921,40 @@ read, so the value does not survive the round trip. Both reference emitters
 already escape CR without being asked; that is a fact about two versions, so the
 conformance tests assert it for CR on the same terms as for the other three.
 
+**The refusal is on the RAW BYTES; the ESCAPED spellings stay legal.** That is
+the discriminating rule of this whole section, and it is what makes the set
+liveable: a value that genuinely needs one of these characters is written
+`name: "demo\Lx"`, which is two ordinary characters to the grammar and reads back
+as `demo<U+2028>x`. The oracle carries that document as a case that must LOAD, so
+the control for this rule is a document that opens rather than a second document
+that is refused for a different reason.
+
+What is NOT true, and was believed here for a while, is that putting the raw
+character inside a double-quoted scalar makes the two readers agree. Measured on
+PyYAML 6.0.3 and yaml-cpp 0.8.0:
+
+- A raw CR or NEL inside a double-quoted scalar FOLDS TO A SPACE in PyYAML:
+  `"demo<CR>x"` and `"demo<NEL>x"` both read back as `demo x`. yaml-cpp folds the
+  CR the same way but KEEPS the NEL bytes, so on the NEL the two readers return
+  different strings and neither says anything.
+- A raw LS or PS is folded by neither reader, but the whitespace AROUND it is
+  dropped by PyYAML and kept by yaml-cpp: `"demo<LS>   x"` reads back as
+  `demo<LS>x` in PyYAML and as `demo<LS>   x` in yaml-cpp, and the same goes for a
+  tab after the character or spaces before it. The apparent agreement holds for
+  exactly one spelling, the one with no adjacent whitespace.
+
+So a quoted scalar is not the safe place for the raw character. It is the place
+where the disagreement stops being about the document's SHAPE, where a key list
+would show it, and becomes a difference in a VALUE, where nothing downstream can
+see it at all.
+
+One caveat on the escaped spellings, measured rather than assumed: yaml-cpp 0.8.0
+reads `\N` as the single byte `0x85` instead of the UTF-8 encoding of `U+0085`,
+while PyYAML reads it as `U+0085`. Both accept the document; they disagree about
+the bytes in the value. `\x85` is read correctly by both and is what the C++
+reference writer emits, so prefer it for NEL. `\r`, `\L` and `\P` agree in both
+readers.
+
 Refusing these four costs nothing on any document that exists: a sweep of every
 `.chiplet` in the ecosystem outside build trees, plus the YAML and stackups
 shipped alongside them, found zero occurrences of the three, and the KiCad plugin
