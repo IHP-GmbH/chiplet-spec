@@ -758,6 +758,16 @@ def dumps(data: Dict[str, Any], *, validate: bool = True,
     block the grammar could not delimit (``FlowSource::NotDelimitable``). A host
     that needs rule 4 keeps the original text beside the parsed document and
     writes the text; this function is not that host.
+
+    Refuses a mapping whose top-level keys this emitter cannot write as KEY
+    LINES, which is the writer half of the top-level block grammar. Measured on
+    PyYAML 6.0.3, a top-level key carrying a space comes out as a bare ``a b:``
+    that the grammar does not recognise, one carrying NEL, LS, PS or a CR comes
+    out as an explicit key (``? "a\\Lb"`` on one line, ``: x: 1`` on the next),
+    and a key such as ``yes`` or ``1.0`` comes out quoted. All three escape the
+    splitter, which then attributes those lines to the PRECEDING key, while
+    ``loads`` reads a key the split never saw. See
+    :func:`_check_writer_top_level_keys`, which is where the refusal is decided.
     """
     out = dict(data)
     if validate:
@@ -766,13 +776,15 @@ def dumps(data: Dict[str, Any], *, validate: bool = True,
         # on write (deduped default channel; every event to on_warn).
         _validate(out, allow_intermediate=True, on_warn=on_warn)
     _apply_write_version(out)
-    return yaml.dump(
+    text = yaml.dump(
         out,
         Dumper=_CanonicalDumper,
         sort_keys=False,
         default_flow_style=False,
         allow_unicode=True,
     )
+    _check_writer_top_level_keys(text, out)
+    return text
 
 
 #: What a scalar may not carry raw on the way OUT: the reader's set with CR
@@ -1058,3 +1070,58 @@ def top_level_block(text: str, key: str) -> Optional[str]:
     that did not author it re-emits unchanged.
     """
     return top_level_blocks(text).get(key)
+
+
+def _check_writer_top_level_keys(text: str, data: Dict[str, Any]) -> None:
+    """Refuse output whose top-level keys the split cannot recover, in order.
+
+    The writer half of the grammar, and it is a POST-check on the emitted text
+    rather than a regex on the keys, deliberately. A pre-check would have to
+    predict the emitter, and the emitter has three ways of writing a key that is
+    not a bare identifier, only one of which a key regex would catch: it quotes
+    ``yes``, ``null`` and ``1.0`` (which pass the key-line expression happily and
+    still come out as a quoted key), it writes an explicit key ``? ...`` with a
+    separate ``: ...`` value line for a key carrying a forbidden line break, and
+    it writes a key with a space bare, as ``a b:``, which is outside the grammar.
+    Running the reader's own splitter over the finished bytes catches all three
+    with one mechanism and cannot drift from the reader, because it IS the
+    reader.
+
+    What it refuses is exactly the SPEC-36 property produced by our own writer:
+    a document whose split and whose parse disagree about the top-level keys.
+    """
+    blocks, not_splittable = _scan_top_level(text)
+    split_keys = [key for key in blocks if key != PREAMBLE_KEY]
+    expected = list(data)
+    if not_splittable is None and split_keys == expected:
+        return
+
+    # The FIRST key the split did not see, in the order they were written. A
+    # position check and not a membership test: the split can also recover a key
+    # under a different NAME (an integer key 1 comes back as the string "1"),
+    # and that is the same defect one step further along.
+    missed, missed_at = None, 0
+    for position, key in enumerate(expected):
+        if position >= len(split_keys) or split_keys[position] != key:
+            missed, missed_at = key, position
+            break
+
+    # And the line the emitter wrote for it. Every top-level key produces
+    # exactly one line at column zero that either opens a block or breaks the
+    # grammar, in document order, so the missed key's line stands at its own
+    # position in that list.
+    interesting = [content for content in
+                   (_content(raw) for raw in _iter_lines(text))
+                   if _is_unattributable(content)
+                   or top_level_key(content) is not None]
+    line = interesting[missed_at] if missed_at < len(interesting) else ""
+    raise ChipletFormatError(
+        f"top-level key {missed!r} cannot be written as a key line: the "
+        f"emitter wrote {line!r}. A top-level key is a bare identifier "
+        f"[A-Za-z0-9_][A-Za-z0-9_.-]* that the emitter writes as a key line at "
+        f"column zero; nested keys are unrestricted. Written as it stands, this "
+        f"document's own splitter attributes those lines to the preceding key, "
+        f"whose owner drops them on the next re-export, while a reader sees a "
+        f"top-level key the split never did. Rename the key, or nest it under "
+        f"one that is a bare identifier "
+        f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")

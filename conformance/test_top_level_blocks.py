@@ -579,3 +579,54 @@ def test_the_other_two_escapes_are_deliberately_unchanged(code_point, escape):
                        "components": []}, validate=False)
     assert escape in text
 
+
+# --- (e) SPEC-41: the writer must not emit what this splitter refuses ------
+@pytest.mark.parametrize("case", UNATTRIBUTABLE, ids=lambda c: c["name"])
+def test_the_unattributable_refusal_names_the_line_and_the_way_out(case):
+    # The message is the assertion, on the same terms as the line-break rule:
+    # all three spellings are ordinary-looking YAML, so a refusal that did not
+    # quote the line and name the spellings would send the author looking at the
+    # wrong part of the file. The two spellings named are the ones our own writer
+    # produced, which is what makes this a defect report rather than a style rule.
+    with pytest.raises(cfio.ChipletFormatError) as excinfo:
+        cfio.top_level_blocks(case["doc"])
+    message = str(excinfo.value)
+    assert "unattributable line at column zero" in message, message
+    offending = next(ln for ln in case["doc"].split("\n")
+                     if cfio._is_unattributable(ln))
+    assert repr(offending) in message, message
+    assert "? ..." in message and "a b:" in message, message
+    assert "docs/CHIPLET_FORMAT_SPEC.md" in message, message
+
+
+@pytest.mark.parametrize("case", SPLITTER_ONLY, ids=lambda c: c["name"])
+def test_the_writer_never_reproduces_a_document_the_splitter_refuses(case):
+    # SPEC-41 stated as one property over the whole group: whatever this writer
+    # emits, the splitter every host runs must recover exactly the top-level keys
+    # the writer was given. The writer meets that either by writing a splittable
+    # document (a quoted key comes back bare, and a tab inside a scalar was never
+    # a top-level key at all) or by refusing; what it may not do is what it used
+    # to do, which is emit a third document its own splitter reads differently.
+    data = cfio.loads(case["doc"], validate=False)
+    try:
+        text = cfio.dumps(data, validate=False)
+    except cfio.ChipletFormatError as excinfo:
+        assert "cannot be written as a key line" in str(excinfo)
+        return
+    assert list(cfio.top_level_blocks(text)) == list(data)
+
+
+def test_the_writer_puts_sequence_entries_at_column_zero():
+    # Why the sequence-entry exemption is in the rule rather than a tidy
+    # afterthought: this writer PUTS those lines at column zero, so a rule that
+    # called every non-key line there unattributable would refuse to split the
+    # documents this repository itself produces. Measured on the emitter rather
+    # than asserted about it, because the indentation is PyYAML's default and a
+    # default is a fact about a version.
+    case = next(c for c in SPLITS if c["name"] ==
+                "components_block_with_sequence_entries_at_column_zero")
+    text = cfio.dumps(cfio.loads(case["doc"], validate=False), validate=False)
+    entries = [ln for ln in text.split("\n") if ln.startswith("- ")]
+    assert entries, "the emitter stopped writing sequence entries at column zero"
+    assert list(cfio.top_level_blocks(text)) == [b["key"] for b in
+                                                 case["blocks"]]
