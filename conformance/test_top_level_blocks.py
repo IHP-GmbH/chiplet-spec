@@ -34,24 +34,35 @@ SPLITS = CASES["splits"]
 REFUSE = CASES["refuse"]
 NOT_DELIMITABLE = CASES["not_delimitable"]
 
-#: The three kinds of refusal, kept apart because they are not the same verdict:
-#: a quoted key at column zero is a valid document nobody can split; a repeated
-#: top-level key is a document no reader may read AND no splitter may attribute;
-#: a forbidden line break is a document no reader may read while the splitter has
-#: a perfectly good answer for it (those bytes are not line breaks to the grammar,
-#: so no block starts there), which is why the grammar case for it stays under
-#: splits.
+#: The three kinds of refusal, kept apart because they describe different SHAPES
+#: of document: a quoted key at column zero is valid YAML nobody can split; a
+#: repeated top-level key is a document no reader may read and no splitter may
+#: attribute; a forbidden line break is a document no reader may read while the
+#: splitter has a perfectly good answer for it (those bytes are not line breaks to
+#: the grammar, so no block starts there), which is why the grammar case for it
+#: stays under splits. The VERDICT is a separate field, read just below.
 NOT_SPLITTABLE = [c for c in REFUSE if c["kind"] == "quoted_key_at_column_zero"]
 ILL_FORMED = [c for c in REFUSE if c["kind"] == "repeated_top_level_key"]
 FORBIDDEN_LINE_BREAK = [c for c in REFUSE if c["kind"] == "forbidden_line_break"]
 
-#: The refusals a SPLITTER owes, which is not the same list as the refusals a
-#: READER owes. Parametrizing the splitter tests over all of REFUSE would assert
-#: that top_level_blocks refuses a document whose split is well defined.
-SPLITTER_REFUSES = NOT_SPLITTABLE + ILL_FORMED
+#: Who owes the refusal, read off the case's own "refused_by" list rather than
+#: inferred from its kind. The group name says "refuse" and says nothing about
+#: WHICH implementation, and inferring it from the membership of the group is what
+#: broke two consumers when six reader-only rows landed in it: their
+#: "the splitter must raise" test was parametrized over the whole group and went
+#: red on a verdict that had been inverted under it. A consumer that filters on
+#: this field survives both kinds of addition; one whose vendored copy predates
+#: the field raises KeyError, which is the failure we want, because a missing
+#: field is loud and an inverted verdict is not.
+SPLITTER_REFUSES = [c for c in REFUSE if "splitter" in c["refused_by"]]
+READER_REFUSES = [c for c in REFUSE if "reader" in c["refused_by"]]
 
-#: Every case that must be refused at LOAD, whatever a splitter does with it.
-READER_REFUSES = ILL_FORMED + FORBIDDEN_LINE_BREAK
+#: The cases a splitter refuses and a reader still reads: the asymmetry itself.
+SPLITTER_ONLY = [c for c in REFUSE if c["refused_by"] == ["splitter"]]
+
+#: The floor under each of the three lists above. A filter that quietly empties
+#: out takes its whole parametrized test with it and leaves a green run behind.
+assert SPLITTER_REFUSES and READER_REFUSES and SPLITTER_ONLY
 
 #: The code points the oracle refuses, read off the file. Every test that used
 #: to spell them out reads this instead.
@@ -74,6 +85,9 @@ _QUOTED_KEY = re.compile(r'^(?:"[^"]*"|\'[^\']*\'):(?:\s.*)?\Z')
 # --- (a) the oracle itself -------------------------------------------------
 def test_oracle_is_wellformed():
     assert ACCEPT and REJECT and SPLITS and REFUSE
+    # The file states its own version, so a consumer holding a stale vendored
+    # copy can say so instead of failing somewhere further down.
+    assert CASES["version"] >= 2
     lines = [c["line"] for c in ACCEPT]
     assert len(lines) == len(set(lines))
     assert len(REJECT) == len(set(REJECT))
@@ -133,6 +147,18 @@ def test_oracle_split_case_is_wellformed(case):
 def test_oracle_refuse_case_is_wellformed(case):
     assert case["doc"] and case["reason"]
     assert isinstance(case["loads"], bool)
+    # Every case says WHO refuses it. This is the field the group name used to
+    # imply, and implying it is what let six reader-only cases land in a group
+    # two consumers read as "the splitter must raise".
+    assert isinstance(case["refused_by"], list) and case["refused_by"], case
+    assert set(case["refused_by"]) <= {"splitter", "reader"}, case
+    assert case["refused_by"] == sorted(case["refused_by"], reverse=True), \
+        "keep the list in one order so a byte-exact vendored copy stays stable"
+    # The two ways of saying the same thing agree. "loads" is what consumers
+    # already read and is kept; "reader" in refused_by is the same fact stated
+    # where the other verdict lives, and a case where they disagree is a case
+    # nobody can implement.
+    assert ("reader" in case["refused_by"]) == (case["loads"] is False), case
     if case["kind"] == "quoted_key_at_column_zero":
         quoted = [ln for ln in case["doc"].split("\n") if _QUOTED_KEY.match(ln)]
         assert quoted, "the case must carry a quoted key at column zero"
@@ -214,7 +240,7 @@ def test_an_ill_formed_document_is_refused_at_load(case):
         cfio.loads(case["doc"])
 
 
-@pytest.mark.parametrize("case", NOT_SPLITTABLE, ids=lambda c: c["name"])
+@pytest.mark.parametrize("case", SPLITTER_ONLY, ids=lambda c: c["name"])
 def test_a_document_a_splitter_refuses_is_still_read(case):
     # Splitting and reading are different verdicts. A quoted key at column zero
     # is an ordinary key to YAML: the document is structurally valid, and flow

@@ -1027,6 +1027,18 @@ document can be loadable and not splittable, splittable and not writable, and
 splittable and not loadable (a forbidden line break, where the grammar has an
 answer and the readers do not). Add a case to that file, never to a consumer.
 
+Each case in the `refuse` group carries an explicit **`refused_by`** list, one or
+both of `"splitter"` and `"reader"`. A consumer MUST filter on that field and
+MUST NOT read the group name as the verdict. The group is called `refuse` and
+says nothing about WHICH implementation refuses; it once held only splitter
+cases, and a test parametrized over the whole group therefore asserted "the
+splitter must raise" for every row in it. When reader-only rows arrived, that
+test failed on documents a splitter is right to accept. Filtering on
+`refused_by` survives both kinds of addition, and a vendored copy predating the
+field fails on a missing key, which is loud, rather than on an inverted verdict,
+which is not. The file also carries a `version`, so a stale copy can be named as
+one.
+
 ## Data Types and Constraints
 
 ### Numeric Values

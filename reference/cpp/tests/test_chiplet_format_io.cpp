@@ -444,10 +444,24 @@ void test_flow_block_is_re_emitted_byte_for_byte() {
 // is the write one, and that is where it is charged.
 void test_quoted_key_at_column_zero_loads_and_may_refuse_to_write() {
     const YAML::Node& oracle = block_oracle();
+    check(oracle["version"] && oracle["version"].as<int>() >= 2,
+          "the oracle states its version, so a stale copy can say so");
     int cases = 0;
     for (const auto& c : oracle["refuse"]) {
         const std::string name = c["name"].as<std::string>();
         const std::string doc = c["doc"].as<std::string>();
+        // Which implementation owes the refusal is a FIELD, never the group.
+        // This reader is only ever the "reader" half of it, and reads "loads"
+        // as it always did; the check here is that the two say the same thing,
+        // so a row that reaches a splitting host cannot mean one verdict there
+        // and another here.
+        std::set<std::string> refused_by;
+        for (const auto& who : c["refused_by"]) {
+            refused_by.insert(who.as<std::string>());
+        }
+        check(!refused_by.empty(), name + ": says who refuses it");
+        check((refused_by.count("reader") == 1) == !c["loads"].as<bool>(),
+              name + ": refused_by and loads agree about the reader");
         if (!c["loads"].as<bool>()) {
             check_throws([&] { cfio::loads(doc); }, name + ": refused at load");
             continue;
