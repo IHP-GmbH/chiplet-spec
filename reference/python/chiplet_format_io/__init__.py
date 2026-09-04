@@ -102,7 +102,7 @@ ACCEPTED_FORMAT_VERSIONS = ("1.0",)
 #: distribution version too (``pyproject.toml`` reads it from here), so a consumer
 #: that installed the package and one that vendored the file agree on the number.
 #: Bumped under the same policy as everything else (docs/VERSION_POLICY.md).
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 #: The closed ``interfaces[].type`` vocabulary (spec validation rule 4). One list
 #: lives in four places -- here, ``schemas/chiplet.schema.json``, the spec prose
