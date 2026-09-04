@@ -440,10 +440,10 @@ void test_flow_block_is_re_emitted_byte_for_byte() {
 // OWN splitter mis-attributes: a top-level key it cannot write bare came out as
 // an explicit key (`? "a\Lb"` with a separate `: x: 1` line) or as `a b:`, both
 // at column zero and neither a key line, so the split reported two top-level
-// keys where the parse reported three. This writer cannot do that, because only
-// its own literal key names ever reach column zero and every data-derived key is
-// nested (the sentence unquote_top_level_keys is built on). That was a REMEMBERED
-// property: a comment in the source, checked by nothing. It is measured here.
+// keys where the parse reported three. The generated mapping uses literal key
+// names, but the appended flow source is caller-controlled. The writer checks
+// its complete output; the corpus below measures its ordinary generated path,
+// and the malicious source-slice test measures the appended path.
 //
 // The splitter is not a public symbol, so the measurement goes through the two
 // places its verdict IS observable from outside. First, `flow_source`: a document
@@ -506,13 +506,14 @@ void test_the_writer_output_splits_into_exactly_the_keys_it_wrote() {
             start = end;
             if (!content.empty() && content.back() == '\n') content.pop_back();
             if (!content.empty() && content.back() == '\r') content.pop_back();
-            if (content.empty() || content[0] == ' ' || content[0] == '\t' ||
+            if (content.find_first_not_of(" \t") == std::string::npos ||
+                content[0] == ' ' ||
                 content[0] == '#') {
                 continue;
             }
             const std::size_t colon = content.find(':');
             check(colon != std::string::npos && colon > 0 &&
-                      content.substr(0, colon).find(' ') == std::string::npos &&
+                      content.substr(0, colon).find_first_of(" \t") == std::string::npos &&
                       content[0] != '-',
                   name + ": every column-zero line the writer emits is a key "
                          "line, not a sequence entry and not a key it had to "
@@ -535,6 +536,37 @@ void test_the_writer_output_splits_into_exactly_the_keys_it_wrote() {
               std::to_string(documents) + " documents)");
 }
 
+void test_writer_refuses_extra_or_unattributable_flow_source() {
+    cfio::ChipletDocument doc = cfio::loads(
+        "format_version: \"1.0\"\nassembly:\n  name: demo\n");
+    doc.has_flow = true;
+    doc.flow_source = cfio::FlowSource::Slice;
+    // The check is unconditional: validate=false cannot waive output ownership.
+    for (const bool validate : {false, true}) {
+        cfio::DumpOptions opts;
+        opts.validate = validate;
+        for (const std::string& slice : {
+                 std::string("flow:\n  steps: []\na b: value\n"),
+                 std::string("flow:\n  steps: []\nnetlist:\n  nets: []\n"),
+                 std::string("flow:\n  note: \"first\nnetlist: x\n  last\"\n")}) {
+            doc.flow_yaml = slice;
+            check_throws([&] { cfio::dumps(doc, opts); },
+                         "writer refuses a flow slice with extra or unattributable keys");
+            try {
+                cfio::dumps(doc, opts);
+            } catch (const cfio::ChipletFormatError& error) {
+                check(std::string(error.what()).find("line ") != std::string::npos,
+                      "writer refusal identifies the offending output line");
+            }
+        }
+        doc.flow_yaml = "flow:\n  # preserve this comment\n  steps: []\n";
+        const std::string text = cfio::dumps(doc, opts);
+        const cfio::ChipletDocument again = cfio::loads(text);
+        check(again.flow_yaml == doc.flow_yaml,
+              "a valid supplied flow slice survives the post-check byte for byte");
+    }
+}
+
 // A quoted key at column zero is valid YAML and is NOT a top-level key line, so
 // a splitter would hand the block to the preceding key, whose owner regenerates
 // it away on the next export. That makes the document NOT SPLITTABLE, which is
@@ -546,9 +578,20 @@ void test_quoted_key_at_column_zero_loads_and_may_refuse_to_write() {
     check(oracle["version"] && oracle["version"].as<int>() >= 2,
           "the oracle states its version, so a stale copy can say so");
     int cases = 0;
+    bool has_unattributable = false;
+    bool has_explicit_key = false;
+    bool has_space_key = false;
+    bool has_non_space_tab_blank = false;
     for (const auto& c : oracle["refuse"]) {
         const std::string name = c["name"].as<std::string>();
         const std::string doc = c["doc"].as<std::string>();
+        if (c["kind"].as<std::string>() ==
+            "unattributable_line_at_column_zero") {
+            has_unattributable = true;
+            has_explicit_key |= doc.find("\n? ") != std::string::npos;
+            has_space_key |= doc.find("\na b:") != std::string::npos;
+            has_non_space_tab_blank |= doc.find("\n\xC2\xA0\n") != std::string::npos;
+        }
         // Which implementation owes the refusal is a FIELD, never the group.
         // This reader is only ever the "reader" half of it, and reads "loads"
         // as it always did; the check here is that the two say the same thing,
@@ -569,6 +612,20 @@ void test_quoted_key_at_column_zero_loads_and_may_refuse_to_write() {
         check_no_throw([&] { cfio::loads(doc); }, name + ": still loads");
         cfio::ChipletDocument parsed = cfio::loads(doc);
         check(!parsed.assembly.name.empty(), name + ": and is read normally");
+        if (refused_by.count("splitter")) {
+            std::string probe = doc;
+            if (!parsed.has_flow) {
+                if (probe.empty() || probe.back() != '\n') probe += '\n';
+                probe += "flow:\n  steps: []\n";
+            }
+            const cfio::ChipletDocument split_probe = cfio::loads(probe);
+            check(split_probe.has_flow, name + ": splitter probe has a flow node");
+            check(split_probe.flow_source == cfio::FlowSource::NotDelimitable,
+                  name + ": splitter obligation refuses to delimit the source");
+            check(split_probe.flow_yaml.empty(), name + ": probe invents no slice");
+            check_throws([&] { cfio::dumps(split_probe); },
+                         name + ": probe refuses to write an unavailable slice");
+        }
         if (c["writes"].as<bool>()) {
             check_no_throw([&] { cfio::dumps(parsed); },
                            name + ": no flow block, so it writes back");
@@ -581,6 +638,10 @@ void test_quoted_key_at_column_zero_loads_and_may_refuse_to_write() {
         }
     }
     check(cases >= 3, "the oracle still carries the refuse cases");
+    check(has_unattributable, "oracle requires the unattributable refusal kind");
+    check(has_explicit_key, "oracle requires the explicit-key writer spelling");
+    check(has_space_key, "oracle requires the bare key with a space");
+    check(has_non_space_tab_blank, "oracle requires a non-SPACE/TAB blank line");
 }
 
 // A flow block the grammar cannot delimit: a flow-style document, or a key line
@@ -597,6 +658,15 @@ void test_flow_block_the_grammar_cannot_delimit_loads_but_does_not_write() {
         ++cases;
         const std::string name = c["name"].as<std::string>();
         const std::string doc = c["doc"].as<std::string>();
+        check(c["kind"] && c["kind"].as<std::string>() ==
+                  "unattributable_line_at_column_zero",
+              name + ": records the splitter refusal kind");
+        std::set<std::string> refused_by;
+        for (const auto& who : c["refused_by"]) {
+            refused_by.insert(who.as<std::string>());
+        }
+        check(refused_by == std::set<std::string>{"splitter"},
+              name + ": explicitly assigns refusal to the splitter alone");
         check_no_throw([&] { cfio::loads(doc); }, name + ": loads");
         cfio::ChipletDocument parsed = cfio::loads(doc);
         check(parsed.has_flow, name + ": the flow node is seen");
@@ -1374,6 +1444,7 @@ int main() {
     test_flow_block_is_the_exact_source_slice();
     test_flow_block_is_re_emitted_byte_for_byte();
     test_the_writer_output_splits_into_exactly_the_keys_it_wrote();
+    test_writer_refuses_extra_or_unattributable_flow_source();
     test_quoted_key_at_column_zero_loads_and_may_refuse_to_write();
     test_forbidden_line_breaks_are_refused_with_a_text_level_reason();
     test_crlf_survives_the_carriage_return_rule();

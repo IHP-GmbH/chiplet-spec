@@ -840,9 +840,14 @@ _CanonicalDumper.add_representer(str, _represent_str)
 
 def dump(data: Dict[str, Any], path, *, validate: bool = True,
          on_warn: Optional[Callable[[str], None]] = None) -> None:
-    """Serialize a .chiplet mapping to a file."""
+    """Serialize a .chiplet mapping to a file.
+
+    Serialize before opening the destination, so refused input leaves an
+    existing file untouched. This does not make filesystem writes atomic.
+    """
+    text = dumps(data, validate=validate, on_warn=on_warn)
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(dumps(data, validate=validate, on_warn=on_warn))
+        fh.write(text)
 
 
 # --- the top-level block grammar -------------------------------------------
@@ -889,7 +894,8 @@ _QUOTED_KEY_LINE_RE = re.compile(
 _SEQUENCE_ENTRY_RE = re.compile(r"^-(?:[ \t].*)?\Z")
 
 #: A document marker, ``---`` or ``...``, alone or introducing a value. Not a key
-#: line and not owned by any top-level key: it lands in the preamble.
+#: line: it stays in the current block, which is the preamble only before the
+#: first key line.
 _DOCUMENT_MARKER_RE = re.compile(r"^(?:---|\.\.\.)(?:[ \t].*)?\Z")
 
 #: Key of the PREAMBLE bucket: the lines before the first key line (a leading
@@ -951,16 +957,17 @@ def _is_unattributable(line_content: str) -> bool:
 
     Five shapes at column zero are attributable and are not this:
 
-    * a blank line, which belongs to whatever block it sits in;
+    * a blank line (only SPACE and TAB), which belongs to its current block;
     * a comment (``#``) and a directive (``%``), on the same terms;
-    * a document marker (``---``, ``...``), which belongs to the preamble;
+    * a document marker (``---``, ``...``), which stays in the current block
+      (the preamble only before the first key line);
     * a BLOCK SEQUENCE ENTRY (``-`` then a space, a tab or end of line), which
       belongs to the key whose block it sits in. This one is not a nicety: it is
       how PyYAML writes every ``components:`` list this ecosystem produces, and
       a rule without it would call almost every real document unsplittable;
     * a key line, which opens a block of its own.
     """
-    if not line_content.strip():
+    if not line_content.strip(" \t"):
         return False
     if line_content[0] in " #%":
         return False
@@ -1020,14 +1027,14 @@ def _scan_top_level(text: str) -> Tuple[Dict[str, str], Optional[str]]:
                     f"line {number}: unattributable line at column zero "
                     f"({content!r}). It is not a key line, and not a comment, "
                     f"a document marker, a directive or a block sequence entry "
-                    f"either, so no top-level key owns it: a splitter attaches "
-                    f"it to the preceding key, where that key's owner drops it "
-                    f"on the next re-export, while a YAML parser reads a "
-                    f"top-level key the split never saw. The other two "
-                    f"spellings the Python writer produces for a key it cannot "
+                    f"either, so the line grammar cannot establish ownership. "
+                    f"Guessing can hide a top-level key or misinterpret a quoted "
+                    f"scalar continuation. Two problematic key "
+                    f"spellings the Python emitter can produce for a key it cannot "
                     f"write bare are the explicit key (`? ...` with its `: ...` "
                     f"value line) and a bare key outside the grammar (`a b:`). "
-                    f"Emit top-level keys as key lines "
+                    f"Emit top-level keys as key lines and re-emit quoted scalar "
+                    f"continuations with a conforming writer "
                     f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
         blocks[current] += line
     if not blocks[PREAMBLE_KEY]:
@@ -1100,10 +1107,11 @@ def _check_writer_top_level_keys(text: str, data: Dict[str, Any]) -> None:
     # position check and not a membership test: the split can also recover a key
     # under a different NAME (an integer key 1 comes back as the string "1"),
     # and that is the same defect one step further along.
-    missed, missed_at = None, 0
+    missed, missed_at, missed_found = None, 0, False
     for position, key in enumerate(expected):
         if position >= len(split_keys) or split_keys[position] != key:
             missed, missed_at = key, position
+            missed_found = True
             break
 
     # And the line the emitter wrote for it. Every top-level key produces
@@ -1115,6 +1123,19 @@ def _check_writer_top_level_keys(text: str, data: Dict[str, Any]) -> None:
                    if _is_unattributable(content)
                    or top_level_key(content) is not None]
     line = interesting[missed_at] if missed_at < len(interesting) else ""
+    if missed_found and not isinstance(missed, str):
+        recovered = top_level_key(line)
+        consequence = (
+            f"The block reader reads it back as the string key {recovered!r}, "
+            f"not the original {type(missed).__name__} key. "
+            if recovered is not None else
+            "The block reader can recover only string keys, and this emitted "
+            "line does not open a key block. ")
+        raise ChipletFormatError(
+            f"top-level key {missed!r} is not a string: the emitter wrote "
+            f"{line!r}. {consequence}Make it a string key that the emitter "
+            f"can write as a key line, or nest it under one "
+            f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
     raise ChipletFormatError(
         f"top-level key {missed!r} cannot be written as a key line: the "
         f"emitter wrote {line!r}. A top-level key is a bare identifier "

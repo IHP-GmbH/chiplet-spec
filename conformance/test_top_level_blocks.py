@@ -59,7 +59,8 @@ FORBIDDEN_LINE_BREAK = [c for c in REFUSE if c["kind"] == "forbidden_line_break"
 #: this field survives both kinds of addition; one whose vendored copy predates
 #: the field raises KeyError, which is the failure we want, because a missing
 #: field is loud and an inverted verdict is not.
-SPLITTER_REFUSES = [c for c in REFUSE if "splitter" in c["refused_by"]]
+SPLITTER_REFUSES = [c for c in REFUSE + NOT_DELIMITABLE
+                   if "splitter" in c["refused_by"]]
 READER_REFUSES = [c for c in REFUSE if "reader" in c["refused_by"]]
 
 #: The cases a splitter refuses and a reader still reads: the asymmetry itself.
@@ -142,6 +143,8 @@ def test_oracle_is_wellformed():
         "the explicit-key spelling the writer emits is not in the oracle"
     assert any("\na b:" in c["doc"] for c in UNATTRIBUTABLE), \
         "the bare-key-with-a-space spelling the writer emits is not in the oracle"
+    assert any("\n\u00a0\n" in c["doc"] for c in UNATTRIBUTABLE), \
+        "the non-SPACE/TAB blank-line refusal is not in the oracle"
     # Both shapes of the disagreement, for EVERY code point in the set, and the
     # set is read off the file rather than named here: naming it here is how the
     # rule shipped with three of its four members. One shape alone certifies one
@@ -231,6 +234,8 @@ def test_oracle_refuse_case_is_wellformed(case):
 @pytest.mark.parametrize("case", NOT_DELIMITABLE, ids=lambda c: c["name"])
 def test_oracle_not_delimitable_case_is_wellformed(case):
     assert case["doc"] and case["reason"]
+    assert case["kind"] == "unattributable_line_at_column_zero", case
+    assert case["refused_by"] == ["splitter"], case
     # The section exists for documents that carry a flow node the grammar cannot
     # delimit, so a case without a flow node is not one of them...
     assert "flow" in case["doc"]
@@ -597,6 +602,8 @@ def test_the_unattributable_refusal_names_the_line_and_the_way_out(case):
     assert repr(offending) in message, message
     assert "? ..." in message and "a b:" in message, message
     assert "docs/CHIPLET_FORMAT_SPEC.md" in message, message
+    assert "line grammar cannot establish ownership" in message, message
+    assert "a YAML parser reads a top-level key the split never saw" not in message
 
 
 @pytest.mark.parametrize("case", SPLITTER_ONLY, ids=lambda c: c["name"])

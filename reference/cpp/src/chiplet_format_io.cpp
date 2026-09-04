@@ -155,7 +155,7 @@ const std::regex& sequence_entry_re() {
 }
 
 // A document marker, `---` or `...`, alone or introducing a value. Not a key
-// line and owned by no top-level key: it lands in the preamble.
+// line: it stays in the current block, or the preamble before the first key.
 const std::regex& document_marker_re() {
     static const std::regex re(R"RX((?:---|\.\.\.)(?:[ \t][^\n]*)?)RX");
     return re;
@@ -196,7 +196,7 @@ std::string top_level_key(const std::string& content) {
 // comment (`#`) or a directive (`%`), a document marker, a block sequence entry,
 // and a key line.
 bool is_unattributable(const std::string& content) {
-    if (content.find_first_not_of(" \t\r\f\v") == std::string::npos) {
+    if (content.find_first_not_of(" \t") == std::string::npos) {
         return false;
     }
     const char first = content[0];
@@ -303,14 +303,13 @@ std::vector<std::pair<std::string, std::string>> split_top_level_blocks(
                     ": unattributable line at column zero (" + content +
                     "). It is not a key line, and not a comment, a document "
                     "marker, a directive or a block sequence entry either, so "
-                    "no top-level key owns it: a splitter attaches it to the "
-                    "preceding key, where that key's owner drops it on the next "
-                    "re-export, while a YAML parser reads a top-level key the "
-                    "split never saw. The other two spellings the Python writer "
-                    "produces for a key it cannot write bare are the explicit "
+                    "the line grammar cannot establish ownership. Guessing can "
+                    "hide a top-level key or misinterpret a quoted scalar "
+                    "continuation. Two problematic key spellings the Python "
+                    "emitter can produce for a key it cannot write bare are the explicit "
                     "key (`? ...` with its `: ...` value line) and a bare key "
                     "outside the grammar (`a b:`). Emit top-level keys as key "
-                    "lines "
+                    "lines and re-emit quoted scalar continuations with a conforming writer "
                     "(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).";
             }
         }
@@ -1456,6 +1455,14 @@ static std::string dumps_text(const ChipletDocument& doc,
         text = unquote_top_level_keys(text);
     }
 
+    // Read the keys of the generated mapping BEFORE appending caller-supplied
+    // source. Parsing the final text would let an extra key in flow_yaml define
+    // its own expected output and defeat the ownership check.
+    std::vector<std::string> expected_keys;
+    for (const auto& entry : YAML::Load(text)) {
+        expected_keys.push_back(entry.first.as<std::string>());
+    }
+
     // The flow block, byte for byte (rule 4). `flow_yaml` is the source slice
     // the reader took, key line included, so it is APPENDED rather than emitted
     // through the node tree: an emitter would re-quote its scalars and drop its
@@ -1478,8 +1485,39 @@ static std::string dumps_text(const ChipletDocument& doc,
         }
         if (block.empty() || block.back() != '\n') block += "\n";
         text += block;
+        expected_keys.emplace_back("flow");
     }
 
+    // Check the COMPLETE output, including the preserved source slice. This is
+    // a writer invariant, not optional document validation. Only the generated
+    // mapping has literal top-level keys; flow_yaml can contain arbitrary text.
+    std::string not_splittable;
+    const auto blocks = split_top_level_blocks(text, &not_splittable);
+    if (!not_splittable.empty()) {
+        throw ChipletFormatError("writer output cannot be split: " + not_splittable);
+    }
+    std::size_t key_index = 0;
+    std::size_t line_number = 1;
+    for (const auto& block : blocks) {
+        if (!block.first.empty()) {
+            if (key_index >= expected_keys.size() ||
+                block.first != expected_keys[key_index]) {
+                throw ChipletFormatError(
+                    "writer output line " + std::to_string(line_number) +
+                    ": top-level key (" + block.first +
+                    ") is not the next key the writer emitted");
+            }
+            ++key_index;
+        }
+        for (const char ch : block.second) {
+            if (ch == '\n') ++line_number;
+        }
+    }
+    if (key_index != expected_keys.size()) {
+        throw ChipletFormatError(
+            "writer output line " + std::to_string(line_number) +
+            ": the split did not recover every key the writer emitted");
+    }
     return text;
 }
 
