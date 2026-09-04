@@ -1,0 +1,25 @@
+{
+  "_comment": "The digest of what the reference writer emits over a fixed corpus, beside the reader release that emitted it. conformance/test_writer_output_pin.py says what it is for and what it does not cover. Regenerate it ONLY together with a release move: that the two cannot drift apart is the entire point.",
+  "reader_release": "1.3.0",
+  "writer_output_sha256": "99674e839cd01d917d0fc48218b5888020c547cd641e72c492c27b90aaf05301",
+  "corpus": [
+    "v0_9_lower_major.chiplet",
+    "v1_0_additive_unknown_key.chiplet",
+    "v1_0_all_blocks.chiplet",
+    "v1_0_assembly_two_die.chiplet",
+    "v1_0_baseline.chiplet",
+    "v1_0_flow_not_delimitable.chiplet",
+    "v1_0_interface_inconsistent_binding.chiplet",
+    "v1_0_interface_pad_mismatch.chiplet",
+    "v1_0_interface_pad_other_layer.chiplet",
+    "v1_0_malformed_version.chiplet",
+    "v1_0_missing_version.chiplet",
+    "v1_0_quoted_key_at_column_zero.chiplet",
+    "v1_0_unknown_interface_type.chiplet",
+    "v1_0_unknown_type_meets_known_io_class.chiplet",
+    "v1_0_unquoted_numeric.chiplet",
+    "v1_1_higher_minor.chiplet",
+    "v2_0_higher_major.chiplet",
+    "__escape_probe__"
+  ]
+}
