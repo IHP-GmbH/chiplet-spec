@@ -55,3 +55,27 @@ def test_both_position_sites_name_the_anchor_that_decides():
     frame = SPEC.split("- **Frame.**", 1)[1].split("- **`anchor:`**", 1)[0]
     for token in ("bbox_center", "gds_origin", "no extra centering"):
         assert token in frame, token
+
+
+def test_no_governed_text_claims_a_reference_reader_refuses_an_io_class():
+    """Both panel members found this clause independently, in the schema.
+
+    `schemas/chiplet.schema.json` justified closing the io_class vocabulary partly
+    with "the C++ reader throws on an unknown value". Measured false: the C++
+    reference stores it verbatim and rule 8 skips a pad whose class has no row,
+    and the Python reference does the same. An earlier slice corrected the same
+    falsehood in the spec prose and missed this copy, which is why it is gated
+    rather than merely fixed: it is the one sentence in the tree that would
+    justify someone re-adding a refusal here.
+
+    What a green here does NOT cover: whether the readers still behave that way.
+    This reads text. The behaviour is the conformance suite's and the panel's
+    carry-not-refuse ruling owns changing it.
+    """
+    import json
+    schema_text = (ROOT / "schemas" / "chiplet.schema.json").read_text(encoding="utf-8")
+    assert "the C++ reader throws on an unknown value" not in schema_text
+    json.loads(schema_text)  # the edit must leave the schema parseable
+    io_class = json.loads(schema_text)["definitions"]["io_pad"]["properties"]["io_class"]
+    assert io_class["enum"] == ["wire_bond", "flipped_bump", "tsv_bump"]
+    assert "neither does" in io_class["description"]
