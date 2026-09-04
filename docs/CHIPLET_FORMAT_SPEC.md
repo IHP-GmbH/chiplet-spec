@@ -983,16 +983,18 @@ rest rather than guessing.
 
 Column zero means the line content does not start with a SPACE. A tab therefore
 counts as column zero, deliberately: this grammar has no notion of tab
-indentation and YAML has none either in block context, so a tab-led line is
-never one an implementation may quietly attribute to the block above it.
+indentation and YAML has none either in block context, so a nonblank tab-led
+line cannot quietly be attributed to the block above it.
 
 At column zero, five shapes are ATTRIBUTABLE and a splitter carries them in the
 block they sit in:
 
-- a blank line;
+- a blank line: its content consists only of SPACE (U+0020) and TAB (U+0009),
+  possibly empty; other Unicode whitespace and C0 separators are not blank;
 - a comment, `#`;
 - a directive, `%`;
-- a document marker, `---` or `...`, which belongs to the preamble;
+- a document marker, `---` or `...`, which belongs to the current block (the
+  preamble only before the first key line);
 - a BLOCK SEQUENCE ENTRY: `-` followed by a space, a tab, or end of content.
 
 The last one is the load-bearing exemption, not a courtesy. PyYAML writes a
@@ -1007,16 +1009,18 @@ agree that it belongs to the key whose block it sits in.
 
 Anything else at column zero makes the document NOT SPLITTABLE. A splitter MUST
 refuse to split it and MUST NOT attribute those bytes to the preceding key. The
-document is still valid YAML and a reader MUST still LOAD it; this is the same
-verdict, on the same terms, as the quoted key in the next section, which is one
+document can still be valid YAML: a reader MUST not reject it merely because it
+cannot be split, but other syntax and load-time checks still apply. This is the
+same verdict, on the same terms, as the quoted key in the next section, which is one
 spelling of this rule and keeps its own diagnostic because its cause is
 different.
 
-The reason is the one this whole section exists for: those bytes are a top-level
-key to a YAML parser and no key at all to the grammar, so the SPLIT and the
-PARSE report different documents from one file and nothing downstream can see
-that they do. Three spellings reach it in practice, and all three came out of a
-reference WRITER rather than out of hand editing:
+The motivating defect is a top-level key to a YAML parser and no key at all to
+the grammar: the SPLIT and the PARSE report different documents from one file.
+The broader rule also refuses continuations whose ownership the line grammar
+cannot establish; it does not assert that every refused line is a parsed key.
+Three problematic key spellings came out of a reference WRITER rather than
+hand editing:
 
 - an EXPLICIT key, `? "a\Lb"` on one line with its value on the next, `: x: 1`,
   which is what PyYAML 6.0.3 emits for a top-level key carrying NEL, LS, PS or a
@@ -1071,9 +1075,22 @@ it catches the keys an emitter quotes on its own initiative (`yes`, `null`,
 
 The Python reference does this in `dumps()`, and its refusal names the key, the
 line the emitter actually wrote, and the way out (rename the key, or nest it).
-The C++ reference needs no check: it only ever writes its own literal key names
-at column zero and every data-derived key is nested, which its tests measure over
-the whole fixture corpus rather than leaving to the comment that used to say so.
+The C++ reference checks its complete output too, after appending any retained
+`flow_yaml` source slice. Its generated mapping uses literal top-level names,
+but the retained slice is caller-supplied text and can introduce additional or
+unattributable lines. The expected key sequence comes from the generated mapping
+plus the one emitted `flow` block, not from parsing the combined output. A failed
+post-check raises `ChipletFormatError`, including with validation disabled.
+
+This is a line-based ownership grammar, not a YAML lexer. It cannot distinguish
+a key-shaped continuation such as `netlist: x` inside a multi-line quoted scalar
+from a real key line; a harmless non-key continuation can instead be refused.
+The readers do not claim that splitting arbitrary hand-authored YAML recovers its
+parsed keys. Neither reference emitter generates that quoted spelling from a
+mapping. Writer post-checks close the producer boundary by requiring the emitted
+key sequence to match the known intended sequence, including when C++ receives
+a caller-supplied source slice. This does not turn the splitter into a parser or
+establish semantic validity of arbitrary source text.
 
 ### Block extent
 

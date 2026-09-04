@@ -1,6 +1,6 @@
 {
   "_comment": "The digest of what the reference writer emits over a fixed corpus, beside the reader release that emitted it. conformance/test_writer_output_pin.py says what it is for and what it does not cover. Regenerate it ONLY together with a release move: that the two cannot drift apart is the entire point.",
-  "reader_release": "1.3.0",
+  "reader_release": "1.4.0",
   "writer_output_sha256": "99674e839cd01d917d0fc48218b5888020c547cd641e72c492c27b90aaf05301",
   "corpus": [
     "v0_9_lower_major.chiplet",
