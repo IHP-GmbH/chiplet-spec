@@ -71,7 +71,15 @@ FORBIDDEN_CODE_POINTS = sorted({c["code_point"] for c in FORBIDDEN_LINE_BREAK})
 #: The escape each code point is written as by the PyYAML emitter. A spelling,
 #: not a set: the members come from the oracle above and a code point that turns
 #: up here without an entry fails the writer test rather than skipping it.
-_ESCAPES = {"U+000D": "\\r", "U+0085": "\\N", "U+2028": "\\L", "U+2029": "\\P"}
+#: The escaped spelling this format uses for each refused character. U+0085 is
+#: "\\x85" and NOT PyYAML's "\\N", which is the spelling PyYAML would pick on its
+#: own: measured on PyYAML 6.0.3 and yaml-cpp 0.8.0, a scalar written "a\\Nb" reads
+#: back as 61 c2 85 62 here and as 61 85 62 there, a BARE 0x85 that is not valid
+#: UTF-8 by itself, so our own escape handed the other reference reader a
+#: malformed string. "\\x85" and "\\u0085" both decode to U+0085 in the two.
+#: "\\L" and "\\P" round-trip correctly in both and are unchanged: the defect was
+#: this one escape, not the family.
+_ESCAPES = {"U+000D": "\\r", "U+0085": "\\x85", "U+2028": "\\L", "U+2029": "\\P"}
 
 #: The range the forbidden set is DERIVED over. It runs past the last character
 #: any YAML 1.1 parser calls a line break (U+2029) with room to spare, and the
@@ -503,3 +511,35 @@ def test_every_refused_character_has_a_legal_escaped_spelling(code_point):
         code_point]
     assert char not in doc
     assert cfio.loads(doc)["assembly"]["name"] == "demo" + char + "x"
+
+
+def test_the_writer_never_emits_the_escape_the_other_reader_gets_wrong():
+    # The writer half of the rule above, and the reason this test exists rather
+    # than a comment: PyYAML's emitter picks "\\N" for U+0085 by itself, so the
+    # correct spelling is not what happens by default and a future dumper change
+    # would silently restore the broken one. Asserted on the emitted TEXT, not on
+    # a round trip through this reader, because this reader decodes both
+    # spellings identically and so cannot tell them apart. That is the point: the
+    # reader that could tell them apart is the C++ one, and its half is asserted
+    # in reference/cpp/tests.
+    import io
+    text = cfio.dumps({"format_version": "1.0",
+                       "assembly": {"name": "a\u0085b"},
+                       "components": []}, validate=False)
+    assert "\\x85" in text
+    assert "\\N" not in text, \
+        "the emitter fell back to \\N, which yaml-cpp reads as a bare 0x85"
+    assert "\u0085" not in text, "the raw character must never reach the file"
+    assert cfio.loads(text)["assembly"]["name"] == "a\u0085b"
+
+
+@pytest.mark.parametrize("code_point,escape",
+                         [("U+2028", "\\L"), ("U+2029", "\\P")])
+def test_the_other_two_escapes_are_deliberately_unchanged(code_point, escape):
+    # The floor guard for the narrow fix: LS and PS round-trip correctly through
+    # both readers, so changing them would churn every existing document for no
+    # gain. Without this, "use the hex form everywhere" reads like a tidy-up.
+    text = cfio.dumps({"format_version": "1.0",
+                       "assembly": {"name": "a" + chr(int(code_point[2:], 16)) + "b"},
+                       "components": []}, validate=False)
+    assert escape in text

@@ -1026,13 +1026,24 @@ ChipletDocument load(const std::string& path, const LoadOptions& opts) {
 
 // The emit pass. `quote_all_strings` is not a caller-facing option and never
 // becomes one: it is the second half of the writer's line-break rule. yaml-cpp
-// writes NEL, U+2028 and U+2029 as RAW bytes in every style, double-quoted
-// included (measured on 0.8.0), and re-escaping them in the finished text is
+// writes U+2028 and U+2029 as RAW bytes in every style, double-quoted included
+// (measured on 0.8.0), and re-escaping them in the finished text is
 // only sound where the scalar carrying them is double-quoted. So when the first
 // pass turns out to contain one, the document is emitted a second time with
 // every string double-quoted and the raw bytes are then replaced by \N, \L and
 // \P. The retry costs one extra emit for a document that should not exist, and
 // the ordinary path pays a substring search.
+//
+// NEL is NOT in that sentence and the difference matters. yaml-cpp escapes NEL
+// by itself, as \x85 (measured on 0.8.0: emitting "a<NEL>b" double-quoted gives
+// the bytes 61 5c 78 38 35 62), so the raw character never survives the first
+// pass and this table's NEL entry is never reached on the write path. The entry
+// stays because the same table drives the refusal message, where it is read.
+// The consequence is for the OTHER writer: PyYAML picks \N for U+0085, and this
+// reader decodes \N to a bare 0x85, which is not valid UTF-8 on its own, so the
+// Python reference writer had to be pushed onto the \x85 spelling to keep a
+// document written there readable here. See the Python dumper's
+// ESCAPE_REPLACEMENTS override and test_nel_escape_hazard_is_pinned below.
 static std::string dumps_text(const ChipletDocument& doc,
                               const DumpOptions& opts, bool quote_all_strings) {
     // Not validation, and so not under opts.validate: this document simply

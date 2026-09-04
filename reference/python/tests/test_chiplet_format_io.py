@@ -140,7 +140,14 @@ def test_the_writer_escapes_a_forbidden_line_break():
     scalar and PyYAML folds them back on the next read, so the value did not
     survive its own round trip before this.
     """
-    for char, escape in (("\u0085", "\\N"), ("\u2028", "\\L"),
+    # U+0085 is "\\x85" and not PyYAML's own "\\N". This test used to pin \\N,
+    # which is how the wrong spelling stayed correct-looking: measured on PyYAML
+    # 6.0.3 and yaml-cpp 0.8.0, "a\\Nb" reads back as 61 c2 85 62 here and as
+    # 61 85 62 there, a bare 0x85 that is not valid UTF-8 on its own, so the
+    # document this writer produced handed the other reference reader a malformed
+    # string. LS and PS round-trip correctly on \\L and \\P in both and are
+    # unchanged; the defect was this one escape, not the family.
+    for char, escape in (("\u0085", "\\x85"), ("\u2028", "\\L"),
                          ("\u2029", "\\P")):
         doc = {"format_version": "1.0",
                "assembly": {"name": "demo" + char + "x"}}

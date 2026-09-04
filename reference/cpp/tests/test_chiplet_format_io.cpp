@@ -1188,6 +1188,40 @@ void test_format_version_refusal_names_every_accepted_major() {
           "the refusal names the accepted majors in the shared phrasing");
 }
 
+// Pins the hazard rather than a behaviour of ours, and says so. This reader
+// decodes the escape \N to a BARE 0x85, which is not valid UTF-8 by itself, so a
+// document that spells U+0085 that way arrives here as a malformed string while
+// comparing equal to nothing in particular. Our own C++ writer never produces it
+// (yaml-cpp escapes NEL as \x85 on its own), but PyYAML picks \N unprompted, so
+// this check exists to keep the Python reference writer's override honest: if
+// anyone removes it, the Python conformance test fails and this one explains
+// why. It is a fact about yaml-cpp 0.8.0, and if a future yaml-cpp fixes it this
+// check fails, which is the right prompt to revisit the Python override.
+static void test_nel_escape_hazard_is_pinned() {
+    cfio::LoadOptions opts;
+    opts.validate = false;
+    const cfio::ChipletDocument bad =
+        cfio::loads("format_version: \"1.0\"\nassembly:\n  name: \"a\\Nb\"\n", opts);
+    check(bad.assembly.name == std::string("a\x85" "b"),
+          "this reader decodes \\N to a bare 0x85, which is why the writers do "
+          "not use it");
+    check(bad.assembly.name != std::string("a\xC2\x85" "b"),
+          "and that is NOT the two bytes U+0085 encodes to");
+
+    // The spelling both readers agree on, and the two that were always fine.
+    const cfio::ChipletDocument good =
+        cfio::loads("format_version: \"1.0\"\nassembly:\n  name: \"a\\x85b\"\n", opts);
+    check(good.assembly.name == std::string("a\xC2\x85" "b"),
+          "\\x85 decodes to U+0085 here, as it does in PyYAML");
+    for (const char* pair : {"\\L", "\\P"}) {
+        const std::string doc = std::string("format_version: \"1.0\"\nassembly:\n"
+                                            "  name: \"a") + pair + "b\"\n";
+        const cfio::ChipletDocument d = cfio::loads(doc, opts);
+        check(d.assembly.name.size() == 5,
+              "LS and PS decode to their three UTF-8 bytes, unchanged");
+    }
+}
+
 int main() {
     std::cout << "chiplet_format_io C++ reference tests\n";
 
@@ -1257,6 +1291,7 @@ int main() {
     test_version_policy_oracle();
     test_format_version_refusal_names_every_accepted_major();
     test_source_has_no_gpl_or_qt_dependency();
+    test_nel_escape_hazard_is_pinned();
 
     std::cout << g_checks << " checks, " << g_failures << " failures\n";
     if (g_failures == 0) {

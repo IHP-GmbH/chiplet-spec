@@ -798,6 +798,21 @@ class _CanonicalDumper(yaml.SafeDumper):
     other three rather than assumed, because that is a fact about a version.
     """
 
+    #: PyYAML spells U+0085 as ``\\N`` in a double-quoted scalar, and that escape
+    #: does not survive the OTHER reference reader. Measured on PyYAML 6.0.3 and
+    #: yaml-cpp 0.8.0: ``"a\\Nb"`` reads back as ``61 c2 85 62`` here and as
+    #: ``61 85 62`` there, a bare 0x85 that is not valid UTF-8 by itself, so a
+    #: document this writer produced hands the C++ reader a malformed string.
+    #: Dropping the entry sends the emitter down its hex path and it writes
+    #: ``\\x85``, which both readers decode to U+0085. ``\\L`` and ``\\P``
+    #: round-trip correctly in both and are deliberately left in place: the
+    #: defect is this one escape, not the family, and removing all three would
+    #: churn every existing document for no gain.
+    ESCAPE_REPLACEMENTS = {
+        k: v for k, v in yaml.SafeDumper.ESCAPE_REPLACEMENTS.items()
+        if k != "\u0085"
+    }
+
 
 def _represent_str(dumper: yaml.SafeDumper, data: str) -> Any:
     tag = "tag:yaml.org,2002:str"
