@@ -132,18 +132,32 @@ root keys exist (the table above, with `additionalProperties: false`, so an
 undeclared root key is a schema error), which block each key holds, the key set
 and types of every block this document defines by key list, and the closed
 vocabularies (component `anchor`, component `orientation`, `interfaces[].type`,
-the adapter-id pattern).
+`io_pads[].io_class`, the adapter-id pattern).
+
+A closed vocabulary binds **writers**. A producer emits a member of the list and
+nothing else, and the schema is where that is enforceable. It does not bind the
+reference readers, which carry every enum-like field as the string the document
+wrote and report an unrecognised member on their warn channel: a reader that
+refuses the DOCUMENT over an unrecognised member turns every future addition to
+one of these lists into a MAJOR for everyone downstream, when the policy makes it
+a MINOR precisely because a consumer can refuse the ELEMENT that carries it and
+end up incomplete rather than wrong (see [`VERSION_POLICY.md`](./VERSION_POLICY.md),
+"What bumps what"). So the schema is stricter than the readers here on purpose,
+and the readers export their vocabulary
+(`chiplet_format_io.KNOWN_INTERFACE_TYPES`, the C++ `kKnownInterfaceTypes`) so a
+consumer has the list to refuse an element against.
 
 The **reference reader stays normative for semantics**: the tolerant
 `format_version` policy, the `_metadata.finalize_required` refusal, the absent
 `anchor` default-and-warn, the `1e5` um leak guard, and every cross-reference
 check. A document can therefore be schema-valid and still be refused by a reader
 (for example a different major, which is a policy question, not a structural
-one), and in two documented cases the reader is deliberately the more tolerant of
-the two: it carries an undeclared root key additively, and it coerces an unquoted
-numeric `format_version` through `str()` for back-compat. Both cases are pinned
-as fixtures in `conformance/`, where a *new* disagreement between the schema and
-the reader fails the gate.
+one), and in documented cases the reader is deliberately the more tolerant of the
+two: it carries an undeclared root key additively, it coerces an unquoted numeric
+`format_version` through `str()` for back-compat, and it carries an
+`interfaces[].type` outside the closed list. Every such case is pinned as a
+fixture in `conformance/`, where a *new* disagreement between the schema and the
+reader fails the gate.
 
 ---
 
@@ -666,14 +680,20 @@ not ending in `.drc`, never a filesystem path.
 ## Interfaces
 
 Optional top-level list of typed die-to-die / bond interfaces in the assembly.
-Each interface has a required `id` and a required `type`; the `type` is validated
-against a known vocabulary and an unknown value is rejected.
+Each interface has a required `id` and a required, non-empty `type`, drawn from
+the closed vocabulary below.
 
 **Known `type` values:** `micro_bump`, `copper_pillar`, `tsv`, `wire_bond`,
 `solder_bump` (the C4-class reflowed solder ball, the interconnect manifest's
-`sbump_sac305`). The reference readers accept `solder_bump` ahead of the 1.1
-stamp; installed consumers may not, which is why producers emit it only from
-1.1.
+`sbump_sac305`). Producers emit `solder_bump` only from format 1.1; until that
+stamp the value in a 1.0 document is out of contract.
+
+The list binds WRITERS and is closed by the schema. The reference readers carry
+whatever string the document holds, report an unrecognised member on their warn
+channel, and refuse nothing over it; a consumer that cannot act on one refuses
+the ELEMENT that carries it, which is what keeps a future addition to this list a
+MINOR (see [Machine-readable schema](#machine-readable-schema) and
+[`VERSION_POLICY.md`](./VERSION_POLICY.md)).
 
 ```yaml
 interfaces:
@@ -1022,7 +1042,7 @@ ones that need a reader, not a schema.
    fields it did not understand.
 2. `assembly.name` is required and must not be empty.
 3. Every component has a non-empty `id` and a non-empty `type`.
-4. Every `interfaces[]` entry has an `id` and a `type`, and the `type` is one of `micro_bump`, `copper_pillar`, `tsv`, `wire_bond`, `solder_bump` (an unknown type is rejected). Both reference validators enforce it.
+4. Every `interfaces[]` entry has an `id` and a non-empty `type`. Both reference validators enforce that much and no more: WHICH type is a closed vocabulary the schema enforces on producers (`micro_bump`, `copper_pillar`, `tsv`, `wire_bond`, `solder_bump`), and the readers carry an unrecognised member as the string it was written as, report it on the warn channel and refuse nothing over it. Refusing the document would make every future addition to the list a MAJOR; refusing the ELEMENT is the consumer's call and is what keeps it a MINOR. This is a VALIDATOR rule, not a parser rule, in both readers: the C++ reference used to enforce it inside `parse_interface`, where `LoadOptions::validate = false` did not reach it, so the two readers disagreed on the same document with validation off.
 5. Every `netlist.nets[]` entry has a `name`. *C++ reference only; the Python reference validator does not check this and accepts a nameless net.*
 6. A file whose top-level `_metadata.finalize_required` is `true` is refused unless intermediate files are explicitly allowed (it is not yet in the canonical frame; run the named `finalizer`).
 7. Quoting is document semantics, not an emitter default. A writer MUST quote EVERY
@@ -1257,3 +1277,4 @@ components:
 | 1.0 | 2026-07-21 | Added the optional interposer `attachment_surface_z` field: the die-attachment (BEOL-top) mount plane, decoupled from `dimensions.thickness`, which now carries the physical substrate body (extending downward from the attachment surface). Backward compatible: consumers fall back to `dimensions.thickness` as the mount reference when the field is absent, so legacy files seat dies unchanged. Updated the reference readers (C++ struct/parse/emit; the Python reader already passes it through) and the canonical example. No on-disk format change; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-09-01 | Added the optional top-level `interposer` block (a single required `adapter`, the interposer-axis registry id), taking the root key count from ten to eleven. The block was already emitted by the KiCad exporter and read by the ADK DRC runner and the cockpit; it had never been written down here, so it was an undocumented root key travelling between three tools. Fixed the `adapter` value as a registry id, never a filesystem path (pattern, no `.drc` suffix), and stated the consumer rule: refuse when an adapter is needed and absent, never default silently. Added [`schemas/chiplet.schema.json`](../schemas/chiplet.schema.json), normative for structure, with the reference reader still normative for semantics; wired it into the conformance gate over the whole committed corpus, with the schema-vs-reader divergences pinned. Backward compatible and optional; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-09-04 | Defined the format's line-break set as LF and CRLF, and made NEL (`U+0085`), `U+2028` and `U+2029` anywhere in a document ill-formed, refused by both reference readers on the text before any YAML parse, with the refusal naming the code point and the line. This is an INTENTIONAL behaviour change, not a regression: `name: demo<U+2028>trailing` loads today in yaml-cpp 0.8.0 and stops loading after this release, and a consumer meets that through its next vendoring bump. It is a clarification rather than a MAJOR because the format had never defined its line-break set, so those bytes were never legal; yaml-cpp accepting them was implementation behaviour that PyYAML already refused on the same bytes; and the population is zero, measured twice (a sweep of every `.chiplet` outside build trees plus the YAML and stackups shipped with them: zero occurrences of `U+2028`, `U+2029` and `U+0085`; the KiCad plugin's own sweep of 187 `.chiplet`: zero). Added the matching writer rule (escape the three inside a double-quoted scalar) and fixed the Python reference writer, which emitted them raw into a single-quoted scalar and then folded them on the next read, so the value did not survive its own round trip. No document shape changed and `format_version` stays `"1.0"`. |
+| 1.0 | 2026-09-04 | Stated who enforces a closed vocabulary, and corrected three sentences that said the wrong thing. A closed vocabulary (component `anchor`, component `orientation`, `interfaces[].type`, `io_pads[].io_class`) binds WRITERS and is enforced by [`schemas/chiplet.schema.json`](../schemas/chiplet.schema.json); the reference readers carry every one of them as the string the document wrote, report an unrecognised member on their warn channel, and refuse nothing over it, so a consumer that cannot act on a member refuses the ELEMENT that carries it. That is what keeps an addition to one of these lists a MINOR: a reader refusing the DOCUMENT would make every future addition a MAJOR for everyone downstream. Rule 4 accordingly drops the clause about refusing an unlisted type and moves TIER in the C++ reference, from the parser to the validator, which is what its own text under "Enforced by the reference validator" always said; it had lived in `parse_interface`, where `LoadOptions::validate = false` did not reach it, so the two readers loaded different documents from one file. The prose list of closed vocabularies gains `io_pads[].io_class` (it closed four, the prose named three), and the gloss saying the reference readers accepted `solder_bump` before the 1.1 stamp is gone: it stated a prohibition in terms of what a reader knows rather than what a document may carry. The `solder_bump` format MINOR is untouched and still owed at 1.1. Reader release 1.1.0 to 1.2.0; no document shape changed and `format_version` stays `"1.0"`. |

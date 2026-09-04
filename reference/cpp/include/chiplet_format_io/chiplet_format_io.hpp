@@ -139,11 +139,18 @@ public:
 // --- Plain value structs (a faithful, lossless view of the .chiplet schema) ---
 //
 // Enum-like fields (component type, interface type, io_class, orientation,
-// anchor, net class) are kept as their canonical YAML *strings*. The format
-// owns the vocabulary; consumers (e.g. a GPL host) map these strings into their
-// own richer enums and own any UX such as warnings on unknown values. Paths are
-// kept verbatim as written in the file -- this library never touches the
-// filesystem for resolution; that is the consumer's responsibility.
+// anchor) are kept as their canonical YAML *strings*, and that is now true of
+// every one of them without exception: nothing in this library refuses a
+// document over an unrecognised member, and an unrecognised interfaces[].type is
+// reported through LoadOptions::on_warn at parse. The format owns the
+// vocabulary, the schema closes each list for WRITERS, and consumers (e.g. a GPL
+// host) map these strings into their own richer enums, own any UX such as
+// warnings on unknown values, and refuse the ELEMENT they cannot act on;
+// kKnownInterfaceTypes above is exported so they can. Net `class` is not in the
+// list because the format owns no net-class vocabulary at all: `Net::net_class`
+// is a free-form string with a default, not a closed set with an unlisted
+// member. Paths are kept verbatim as written in the file -- this library never
+// touches the filesystem for resolution; that is the consumer's responsibility.
 
 struct Position3D {
     double x = 0.0;
@@ -356,9 +363,12 @@ struct ChipletDocument {
     std::string flow_yaml;
     FlowSource flow_source = FlowSource::Absent;
 
-    // Non-fatal reader notes (e.g. a same-major higher-minor format_version).
-    // Per-document, so there is no global state and a GUI host can surface them
-    // however it likes; never written to stderr by the library.
+    // Non-fatal reader notes (a same-major higher-minor format_version, an
+    // unrecognised member of a closed vocabulary). Per-document, so there is no
+    // global state and a GUI host can surface them however it likes; never
+    // written to stderr by the library. NON-NORMATIVE convenience: the channel
+    // a consumer gates on is LoadOptions::on_warn, which receives every event
+    // undeduplicated and is the one the Python reference mirrors.
     std::vector<std::string> warnings;
 
     // Convenience lookup; returns nullptr if no technology with that id exists.
@@ -368,8 +378,19 @@ struct ChipletDocument {
 struct LoadOptions {
     bool allow_intermediate = false;  // accept _metadata.finalize_required files
     bool validate = true;             // run semantic validation after parsing
-    // Optional sink for non-fatal reader notes. When unset, notes still land in
-    // ChipletDocument::warnings. Never called with a fatal condition (those throw).
+    // The single NORMATIVE channel for non-fatal reader notes: every event,
+    // undeduplicated, in the order it happened, and it is what a consumer counts
+    // or gates on. Never called with a fatal condition (those throw), never
+    // stderr. ChipletDocument::warnings carries the same notes and is
+    // non-normative CONVENIENCE for a host that would rather read a vector than
+    // set a callback; so is the Python reference's stdlib `warnings` emission,
+    // which is deduplicated per version and is a process-global the host
+    // configures. A consumer that needs the events sets this.
+    //
+    // A note about an unrecognised member of a closed vocabulary is produced at
+    // PARSE, so it arrives with validate = false as well. That is deliberate: a
+    // consumer running with validation off is the one most likely to meet a
+    // document from a newer minor.
     std::function<void(const std::string&)> on_warn;
 };
 
@@ -395,9 +416,12 @@ void dump(const ChipletDocument& doc, const std::string& path,
 
 // Validate the semantic invariants that survive into the struct model
 // (format_version, intermediate guard, assembly.name, component id/type,
-// interface id/type, netlist net.name). Structural checks (a section being a
-// map vs a sequence) happen during parsing. Throws ChipletFormatError on the
-// first violation. Set allow_intermediate to accept finalize_required documents.
+// interface id and non-empty type, netlist net.name). Structural checks (a
+// section being a map vs a sequence) happen during parsing. WHICH interface type
+// is not checked here or anywhere else in this library: the vocabulary binds
+// writers and the schema enforces it, and an unrecognised member is reported
+// through on_warn and carried. Throws ChipletFormatError on the first violation.
+// Set allow_intermediate to accept finalize_required documents.
 void validate(const ChipletDocument& doc, bool allow_intermediate = false,
               const std::function<void(const std::string&)>& on_warn = {});
 

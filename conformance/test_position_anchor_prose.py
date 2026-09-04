@@ -20,8 +20,13 @@ it gates the two sites that carried it.
 """
 
 import pathlib
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "reference" / "python"))
+
+import chiplet_format_io as cfio  # noqa: E402
+
 SPEC = (ROOT / "docs" / "CHIPLET_FORMAT_SPEC.md").read_text(encoding="utf-8")
 CONTRACT = (ROOT / "docs" / "coord_frame_contract.md").read_text(encoding="utf-8")
 
@@ -79,3 +84,53 @@ def test_no_governed_text_claims_a_reference_reader_refuses_an_io_class():
     io_class = json.loads(schema_text)["definitions"]["io_pad"]["properties"]["io_class"]
     assert io_class["enum"] == ["wire_bond", "flipped_bump", "tsv_bump"]
     assert "neither does" in io_class["description"]
+
+
+def test_no_governed_text_says_a_reference_reader_refuses_an_interface_type():
+    """The SPEC-32 half of the same defect, gated the same way.
+
+    Three sentences said the readers enforce the closed interfaces[].type
+    vocabulary: the schema's own type description ("an unknown interface type is
+    rejected, by this schema and by both reference validators"), the spec's rule
+    4 ("Both reference validators enforce it") and the "the reference readers
+    accept it ahead of the 1.1 stamp" gloss on solder_bump, which stated the
+    prohibition in terms of what a READER knows rather than what a DOCUMENT may
+    carry, so the same bytes were valid or invalid according to which binary
+    opened them. The panel ruling reverses all three: the vocabulary binds
+    WRITERS and is enforced by the schema, the readers carry the string, and a
+    consumer refuses the ELEMENT.
+
+    Gated rather than merely fixed for the reason the io_class clause above is:
+    each of these is a sentence that would justify someone re-adding a refusal.
+
+    What a green here does NOT cover: the readers' behaviour, which is
+    conformance/test_unknown_vocabulary_roundtrip.py and the C++ binary's own
+    cross product over the same oracle.
+    """
+    import json
+    schema_text = (ROOT / "schemas" / "chiplet.schema.json").read_text(
+        encoding="utf-8")
+    for governed in (SPEC, schema_text):
+        assert "ahead of the 1.1 stamp" not in governed
+        assert "rejected, by this schema" not in governed
+    assert "Both reference validators enforce it" not in SPEC
+    json.loads(schema_text)
+    iface = json.loads(schema_text)["definitions"]["interface"]["properties"]["type"]
+    # The vocabulary is still CLOSED in the schema: the ruling moved who
+    # enforces it, not whether it exists. A green that let the enum go would be
+    # the opposite mistake.
+    assert iface["enum"] == list(cfio.KNOWN_INTERFACE_TYPES)
+    assert "binds WRITERS" in SPEC
+
+
+def test_the_closed_vocabulary_list_in_the_prose_is_complete():
+    """The prose listed three closed vocabularies where the schema closes four.
+
+    Both panel members reached the same place from it: the defect is not a
+    missing criterion, it is artifacts violating the criterion they already have,
+    and a list that quietly omits io_class is how one of them got away with it.
+    """
+    section = SPEC.split("### Machine-readable schema", 1)[1].split("---", 1)[0]
+    for vocabulary in ("`anchor`", "`orientation`", "`interfaces[].type`",
+                       "`io_pads[].io_class`"):
+        assert vocabulary in section, vocabulary
