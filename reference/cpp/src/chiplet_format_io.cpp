@@ -385,23 +385,6 @@ ConnectionStack parse_connection_stack(const std::string& id,
     return stack;
 }
 
-// The closed interface-type vocabulary (spec validation rule 4). One list, four
-// places: this array, schemas/chiplet.schema.json, the spec prose and the Python
-// KNOWN_INTERFACE_TYPES; conformance/test_interface_types.py reads all four and
-// fails when one moves alone. solder_bump is the C4-class reflowed solder ball
-// (the interconnect manifest's sbump_sac305), accepted by this reference reader
-// ahead of the 1.1 stamp; an installed consumer may not, which is why producers
-// emit it only from 1.1.
-const std::array<const char*, 5> kKnownInterfaceTypes = {
-    "micro_bump", "copper_pillar", "tsv", "wire_bond", "solder_bump"};
-
-bool is_known_interface_type(const std::string& t) {
-    for (const char* k : kKnownInterfaceTypes) {
-        if (t == k) return true;
-    }
-    return false;
-}
-
 // Validation rule 8's table (spec, "Usage class and interface type"): which
 // interface types a pad of a given io_class may take part in. One row per
 // io_class, nullptr-padded because the rows are not the same length.
@@ -442,8 +425,17 @@ std::string allowed_list(const PadUsageRow& row) {
 // scope by decision until an explicit pad binding exists (SPEC-24). A pad whose
 // io_class is outside the table is not judged here; that vocabulary is closed by
 // the schema.
+//
+// An unrecognised interface TYPE is skipped for the same reason and by the same
+// shape of test, and that symmetry is a fix rather than a tidy-up: this was the
+// THIRD place the library refused an unknown type, and the one that survived
+// removing the other two, because a type outside the table matches no allowed
+// entry and so came out as a violation instead of as a value the rule has
+// nothing to say about. Rule 8 relates two CLOSED vocabularies; a member of
+// neither is outside its domain, not in breach of it.
 void check_pad_usage(const ChipletDocument& doc) {
     for (const auto& iface : doc.interfaces) {
+        if (!is_known_interface_type(iface.type)) continue;
         const InterfaceEndpoint* endpoints[2] = {
             iface.from ? &iface.from.value() : nullptr,
             iface.to ? &iface.to.value() : nullptr};
@@ -483,7 +475,15 @@ InterfaceEndpoint parse_endpoint(const YAML::Node& node) {
     return ep;
 }
 
-Interface parse_interface(const YAML::Node& node) {
+// The warn sink is threaded in rather than left to the caller because the note
+// for an unrecognised vocabulary member has to be produced HERE, at parse, and
+// not inside validate: a consumer running with LoadOptions::validate = false is
+// the one most likely to meet a document from a newer minor, and a note that
+// fires only under validation is delivered on the default path and dropped on
+// the path an orchestrator actually takes. The sink is internal API; the public
+// contract is LoadOptions::on_warn.
+Interface parse_interface(const YAML::Node& node,
+                          const std::function<void(const std::string&)>& warn) {
     if (!node["id"] || node["id"].IsNull()) {
         throw ChipletFormatError("interface missing required field: id");
     }
@@ -493,8 +493,20 @@ Interface parse_interface(const YAML::Node& node) {
     Interface iface;
     iface.id = node["id"].as<std::string>();
     iface.type = node["type"].as<std::string>();
-    if (!is_known_interface_type(iface.type)) {
-        throw ChipletFormatError("unknown interface type: " + iface.type);
+    // Carried, not refused. The format owns the vocabulary, the schema closes it
+    // for WRITERS, and a consumer that cannot act on an unrecognised member
+    // refuses the ELEMENT; refusing the DOCUMENT here would turn every future
+    // enum member into a MAJOR for everyone downstream.
+    if (warn && !is_known_interface_type(iface.type)) {
+        std::string known;
+        for (const char* k : kKnownInterfaceTypes) {
+            if (!known.empty()) known += ", ";
+            known += k;
+        }
+        warn("interface '" + iface.id + "' has an interface type this reader "
+             "does not know, '" + iface.type + "'; it is carried through "
+             "verbatim. Known types are " + known +
+             " (docs/CHIPLET_FORMAT_SPEC.md, validation rule 4)");
     }
     if (node["from"]) iface.from = parse_endpoint(node["from"]);
     if (node["to"]) iface.to = parse_endpoint(node["to"]);
@@ -683,6 +695,13 @@ void emit_technology_fields(YAML::Emitter& out, const Technology& tech) {
 
 }  // namespace
 
+bool is_known_interface_type(const std::string& t) {
+    for (const char* k : kKnownInterfaceTypes) {
+        if (t == k) return true;
+    }
+    return false;
+}
+
 std::string check_format_version(
     const std::string& fv,
     const std::function<void(const std::string&)>& on_warn) {
@@ -790,9 +809,12 @@ void validate(const ChipletDocument& doc, bool allow_intermediate,
         if (iface.id.empty()) {
             throw ChipletFormatError("interface missing required field: id");
         }
-        if (iface.type.empty() || !is_known_interface_type(iface.type)) {
+        // Rule 4 is an id and a type, and nothing about which type: an
+        // unrecognised member is carried and reported on the warn channel at
+        // parse, never refused here or on the write path.
+        if (iface.type.empty()) {
             throw ChipletFormatError("interface '" + iface.id +
-                                     "' has missing or unknown type");
+                                     "' missing required field: type");
         }
     }
     for (const auto& net : doc.netlist.nets) {
@@ -846,9 +868,11 @@ ChipletDocument loads(const std::string& text, const LoadOptions& opts) {
             as_or<std::string>(root["_metadata"], "finalizer", "");
     }
 
-    // Non-fatal reader notes (a same-major higher minor) land on the document
-    // and, when the caller supplied one, on opts.on_warn. Never stderr, never a
-    // throw (fatal conditions throw ChipletFormatError instead).
+    // Non-fatal reader notes. opts.on_warn is the single NORMATIVE channel:
+    // every event, undeduplicated, in the order it happened. Pushing onto
+    // doc.warnings as well is non-normative convenience for a host that would
+    // rather read a vector than set a callback. Never stderr, never a throw
+    // (fatal conditions throw ChipletFormatError instead).
     auto warn_sink = [&doc, &opts](const std::string& msg) {
         doc.warnings.push_back(msg);
         if (opts.on_warn) opts.on_warn(msg);
@@ -916,7 +940,9 @@ ChipletDocument loads(const std::string& text, const LoadOptions& opts) {
             throw ChipletFormatError("'interfaces' must be a sequence");
         }
         for (const auto& ifaceNode : root["interfaces"]) {
-            doc.interfaces.push_back(parse_interface(ifaceNode));
+            // warn_sink, not opts.on_warn: the vocabulary note is produced at
+            // parse under either setting of opts.validate.
+            doc.interfaces.push_back(parse_interface(ifaceNode, warn_sink));
         }
     }
 

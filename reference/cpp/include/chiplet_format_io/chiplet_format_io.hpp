@@ -77,7 +77,26 @@ static_assert(detail::is_accepted(SUPPORTED_FORMAT_VERSION),
 // a reader RELEASE, so a vendored mirror can be gated on a version instead of on
 // bytes. The two reference implementations ship one release number, and
 // conformance/test_version_policy.py fails if they drift apart.
-inline constexpr const char* READER_RELEASE = "1.1.0";
+inline constexpr const char* READER_RELEASE = "1.2.0";
+
+// The closed interfaces[].type vocabulary (spec validation rule 4), exported
+// because a consumer needs it. This library carries whatever string the document
+// wrote and refuses nothing over it, so the consumer is the one that decides an
+// unrecognised member is unusable, and it cannot refuse the ELEMENT that carries
+// one without the list to compare against. Element-refusal is what makes an
+// added enum member a MINOR rather than a MAJOR (docs/VERSION_POLICY.md), so
+// this array is part of that promise and not a convenience. It is also the list
+// a WRITER is bound to: the schema closes the vocabulary for producers.
+// One list, four places (this array, schemas/chiplet.schema.json, the spec prose
+// and the Python KNOWN_INTERFACE_TYPES); conformance/test_interface_types.py
+// reads all four.
+inline constexpr std::array<const char*, 5> kKnownInterfaceTypes = {
+    {"micro_bump", "copper_pillar", "tsv", "wire_bond", "solder_bump"}};
+
+// Whether `t` is a member of kKnownInterfaceTypes. Exported with the array: a
+// consumer that has to write the loop itself will write it slightly differently
+// somewhere, and then two consumers disagree about one document.
+bool is_known_interface_type(const std::string& t);
 
 // Apply the tolerant format_version policy (parity-bound to the Python
 // check_format_version): malformed, or a major outside ACCEPTED_FORMAT_VERSIONS

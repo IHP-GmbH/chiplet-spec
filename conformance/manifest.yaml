@@ -145,6 +145,23 @@ fixtures:
     expect: refuse
     pad_usage_only: true
 
+  # SPEC-32: an interfaces[].type outside the closed vocabulary is CARRIED, by
+  # every reader here, under either setting of the validate flag. The second
+  # document is the one that decides it: its interface meets a pad whose io_class
+  # HAS a row in rule 8's table, which is where the refusal survived after the
+  # parse-path and validate-path ones were removed. The accept verdict is the
+  # cross-implementation half; the per-cell behaviour (validate on and off, load
+  # and load-then-dump, one note per load on the normative channel) is
+  # conformance/fixtures/unknown_vocabulary_cases.json, which both reference
+  # readers run in their own suites.
+  - file: v1_0_unknown_interface_type.chiplet
+    expect: accept
+    version: "1.0"
+
+  - file: v1_0_unknown_type_meets_known_io_class.chiplet
+    expect: accept
+    version: "1.0"
+
   # Validation rule 9 (component connection -> method -> interfaces[].type), the
   # cross-artifact rule. No implementation listed above runs it: the method's
   # interface_type lives in the interconnect manifest and none of these readers

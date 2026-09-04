@@ -32,6 +32,15 @@ manifest, ``interconnect_methods.json``)::
 
     cfio.check_contract_version(doc["version"], "1.0", name="io_pads.json")
 
+The warn channel, stated once because two references have to mean the same thing
+by it. ``on_warn`` is the single NORMATIVE channel: every event, undeduplicated,
+in the order it happened, and it is what a consumer counts or gates on.
+Everything else this library does with a note is non-normative CONVENIENCE and
+may change without a format version moving: the stdlib ``warnings`` emission
+here (deduplicated per version, and a process-global the host configures) and
+``ChipletDocument::warnings`` on the C++ side. A consumer that needs the events
+sets ``on_warn``.
+
 Two version constants, and they answer different questions.
 :data:`SUPPORTED_FORMAT_VERSION` is the highest ``.chiplet`` ``format_version``
 this reader was written for, i.e. a fact about documents. :data:`__version__` is
@@ -93,16 +102,17 @@ ACCEPTED_FORMAT_VERSIONS = ("1.0",)
 #: distribution version too (``pyproject.toml`` reads it from here), so a consumer
 #: that installed the package and one that vendored the file agree on the number.
 #: Bumped under the same policy as everything else (docs/VERSION_POLICY.md).
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 #: The closed ``interfaces[].type`` vocabulary (spec validation rule 4). One list
 #: lives in four places -- here, ``schemas/chiplet.schema.json``, the spec prose
 #: and the C++ ``kKnownInterfaceTypes`` -- and conformance/test_interface_types.py
 #: reads all four, so a member added to one alone fails there instead of
-#: travelling. ``solder_bump`` is the C4-class reflowed solder ball (the
-#: interconnect manifest's ``sbump_sac305``): the reference readers accept it
-#: ahead of the 1.1 stamp, installed consumers may not, and that is why producers
-#: emit it only from 1.1.
+#: travelling. It is the vocabulary a WRITER is bound to and the list a consumer
+#: reads to decide what it can act on; this reader does not refuse a string
+#: outside it, it carries the value and reports the event on ``on_warn``.
+#: ``solder_bump`` is the C4-class reflowed solder ball (the interconnect
+#: manifest's ``sbump_sac305``); producers emit it only from format 1.1.
 KNOWN_INTERFACE_TYPES = ("micro_bump", "copper_pillar", "tsv", "wire_bond",
                          "solder_bump")
 
@@ -514,11 +524,17 @@ def _validate(data: Dict[str, Any], *, allow_intermediate: bool,
 
 
 def _validate_interfaces(ifaces: Any) -> None:
-    """Validation rule 4: an id, a type, and the type is a KNOWN one.
+    """Validation rule 4: an interface has an id and a type. That is all.
 
-    The C++ reference has always enforced this; the Python one accepted an
-    unknown type, so a document refused by one reader loaded in the other and
-    the spec had to carry an italic exception. It does not any more.
+    Whether the type is a member of :data:`KNOWN_INTERFACE_TYPES` is NOT decided
+    here, and neither reference reader decides it any more. The library carries
+    every enum-like field as the string the document wrote, the schema closes
+    each vocabulary and binds WRITERS, and a consumer that cannot act on an
+    unrecognised member refuses the ELEMENT that carries it. Refusing the
+    DOCUMENT is what turns an added enum member from a MINOR into a MAJOR for
+    everyone downstream (docs/VERSION_POLICY.md, "What bumps what"), which is why
+    it is not this reader's call to make. The unrecognised member is reported on
+    the warn channel instead, at parse; see :func:`_note_unknown_vocabulary`.
     """
     if ifaces is None:
         return
@@ -529,14 +545,43 @@ def _validate_interfaces(ifaces: Any) -> None:
             raise ChipletFormatError(f"interface[{i}] must be a mapping")
         if not iface.get("id"):
             raise ChipletFormatError(f"interface[{i}] missing required 'id'")
-        itype = iface.get("type")
-        if not itype:
+        if not iface.get("type"):
             raise ChipletFormatError(
                 f"interface {iface['id']!r} missing required 'type'")
-        if itype not in KNOWN_INTERFACE_TYPES:
-            raise ChipletFormatError(
-                f"interface {iface['id']!r} has unknown type {itype!r}; known "
-                f"types are {', '.join(KNOWN_INTERFACE_TYPES)}")
+
+
+def _note_unknown_vocabulary(
+        data: Any, on_warn: Optional[Callable[[str], None]]) -> None:
+    """Report an unrecognised member of a closed vocabulary on the warn channel.
+
+    Called from :func:`loads` at PARSE, outside the ``validate`` gate, and that
+    position is the whole point: a consumer running with ``validate=False`` is
+    the one most likely to meet a document from a newer minor, and a note that
+    only fires under validation is delivered on the default path and dropped on
+    the path an orchestrator actually takes.
+
+    ``on_warn`` receives every event, undeduplicated: it is the single NORMATIVE
+    channel of this reader. Everything else is convenience (see the module
+    docstring), and a consumer that wants to count notes per document counts
+    these.
+    """
+    if on_warn is None:
+        return
+    ifaces = data.get("interfaces") if isinstance(data, dict) else None
+    if not isinstance(ifaces, list):
+        return
+    for iface in ifaces:
+        if not isinstance(iface, dict):
+            continue
+        itype = iface.get("type")
+        if isinstance(itype, str) and itype and \
+                itype not in KNOWN_INTERFACE_TYPES:
+            on_warn(
+                f"interface {iface.get('id')!r} has an interface type this "
+                f"reader does not know, {itype!r}; it is carried through "
+                f"verbatim. Known types are "
+                f"{', '.join(KNOWN_INTERFACE_TYPES)} "
+                f"(docs/CHIPLET_FORMAT_SPEC.md, validation rule 4)")
 
 
 
@@ -551,6 +596,14 @@ def _validate_pad_usage(ifaces: Any, comps: Any) -> None:
     no inline pads (a die) is not checked at all until an explicit pad binding
     exists (SPEC-24). A pad whose io_class is outside the table is not judged
     here either; the schema closes that vocabulary.
+
+    An unrecognised interface TYPE is skipped for exactly the same reason as an
+    unrecognised io_class, and the symmetry is the fix: this rule was the third
+    place the library refused an unknown type, and the only one that survived
+    removing the other two, because a type outside the table matches no allowed
+    entry and so read as a violation rather than as a value the rule has nothing
+    to say about. Rule 8 relates two CLOSED vocabularies; a member of neither is
+    outside its domain, not in breach of it.
     """
     if not isinstance(ifaces, list) or not isinstance(comps, list):
         return
@@ -562,6 +615,8 @@ def _validate_pad_usage(ifaces: Any, comps: Any) -> None:
         if not isinstance(iface, dict):
             continue
         itype = iface.get("type")
+        if itype not in KNOWN_INTERFACE_TYPES:
+            continue
         for side in ("from", "to"):
             endpoint = iface.get(side)
             if not isinstance(endpoint, dict):
@@ -621,6 +676,10 @@ def loads(text: str, *, allow_intermediate: bool = False, validate: bool = True,
     # One pass over the text. Cheap, and it is the only place the repeat is
     # visible: `data` above has already resolved it away.
     _scan_top_level(text)
+    # At PARSE, deliberately outside the gate below: an unrecognised member of a
+    # closed vocabulary is news for every caller, and the caller most likely to
+    # meet one is the orchestrator that passed validate=False.
+    _note_unknown_vocabulary(data, on_warn)
     if validate:
         _validate(data, allow_intermediate=allow_intermediate, on_warn=on_warn)
     return data

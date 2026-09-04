@@ -7,7 +7,7 @@
 cmake_minimum_required(VERSION 3.16)
 # VERSION is the reader release, kept equal to READER_RELEASE in the header and
 # to chiplet_format_io.__version__ on the Python side.
-project(chiplet_format_io LANGUAGES CXX VERSION 1.1.0)
+project(chiplet_format_io LANGUAGES CXX VERSION 1.2.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,6 +59,15 @@ if(CHIPLET_FORMAT_IO_BUILD_TESTS)
     # The version policy's verdict oracle, on the same terms (default here,
     # CHIPLET_VERSION_ORACLE overrides at run time, absence fails the run):
     # the Python reference runs the same rows in conformance/test_version_policy.py.
-    CHIPLET_VERSION_ORACLE_DEFAULT="${_chiplet_spec_root}/conformance/fixtures/version_policy_cases.json")
+    CHIPLET_VERSION_ORACLE_DEFAULT="${_chiplet_spec_root}/conformance/fixtures/version_policy_cases.json"
+    # The carry-rule oracle (SPEC-32): the cross product of implementation,
+    # LoadOptions::validate and load vs load-then-dump, over the same documents
+    # conformance/test_unknown_vocabulary_roundtrip.py runs. Same terms again
+    # (default here, CHIPLET_VOCABULARY_ORACLE overrides, absence fails the run),
+    # plus the fixture directory, because these cells read whole documents rather
+    # than inline strings: the interesting one is the document whose interface
+    # meets an interposer pad, and inlining that would put a fixture in two files.
+    CHIPLET_VOCABULARY_ORACLE_DEFAULT="${_chiplet_spec_root}/conformance/fixtures/unknown_vocabulary_cases.json"
+    CHIPLET_FIXTURES_DIR="${_chiplet_spec_root}/conformance/fixtures")
   add_test(NAME chiplet_format_io COMMAND test_chiplet_format_io)
 endif()

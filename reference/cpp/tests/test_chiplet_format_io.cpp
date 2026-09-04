@@ -112,6 +112,24 @@ const YAML::Node& version_oracle() {
     return node;
 }
 
+// The carry-rule oracle (SPEC-32), on the same terms as the other two: a
+// compile-time default from this source tree, CHIPLET_VOCABULARY_ORACLE
+// overrides at run time, and main() fails the run if the file is not there
+// rather than letting the cross product report green over cells it never read.
+// The fixtures it names are read from the same directory it lives in.
+std::string vocabulary_oracle_path() {
+    const char* env = std::getenv("CHIPLET_VOCABULARY_ORACLE");
+    if (env != nullptr && *env != '\0') return std::string(env);
+    return std::string(CHIPLET_VOCABULARY_ORACLE_DEFAULT);
+}
+
+const YAML::Node& vocabulary_oracle() {
+    static const YAML::Node node = YAML::LoadFile(vocabulary_oracle_path());
+    return node;
+}
+
+const std::string kFixturesDir = CHIPLET_FIXTURES_DIR;
+
 void test_roundtrip_canonical_example() {
     const std::string path = kExamplesDir + "/interposer_demo_design.chiplet";
     cfio::ChipletDocument first = cfio::load(path);
@@ -194,11 +212,131 @@ void test_dump_roundtrips_components_order() {
     check(ids.size() >= 2, "example has the expected components");
 }
 
-void test_unknown_interface_type_rejected() {
+// Inverted by the SPEC-32 ruling, and the parity assertion is RESTATED rather
+// than deleted, because parity is what the original test was really about. It
+// asserted that an unknown type throws here, so that a document refused by one
+// reference reader was refused by the other. The verdict moved, the property did
+// not: the two readers must still agree on this document, and now they agree by
+// CARRYING it. The Python twin is
+// conformance/test_interface_types.py::test_the_python_validator_carries_an_unknown_type.
+void test_unknown_interface_type_is_carried_not_refused() {
     const std::string doc =
         "format_version: \"1.0\"\nassembly:\n  name: a\n"
         "interfaces:\n- id: i1\n  type: bogus_bond\n";
-    check_throws([&] { cfio::loads(doc); }, "unknown interface type rejected");
+    cfio::ChipletDocument parsed;
+    // Through check_no_throw, not a bare call: a reader that still refuses must
+    // make this test FAIL and let the cross product below run and fail too. An
+    // unhandled throw here would abort the binary and hide every cell after it,
+    // which is the wrong fix being caught in the least useful possible way.
+    check_no_throw([&] { parsed = cfio::loads(doc); },
+                   "an unknown interface type is not refused");
+    check(parsed.interfaces.size() == 1 &&
+              parsed.interfaces[0].type == "bogus_bond",
+          "and the string is carried through verbatim");
+    // The type is still REQUIRED; carrying an unknown one is not the same as
+    // accepting a missing one, and collapsing the two would delete rule 4.
+    check_throws([&] {
+        cfio::loads("format_version: \"1.0\"\nassembly:\n  name: a\n"
+                    "interfaces:\n- id: i1\n");
+    }, "an interface with no type at all is still refused");
+    check_throws([&] {
+        cfio::ChipletDocument d;
+        d.format_version = cfio::SUPPORTED_FORMAT_VERSION;
+        d.assembly.name = "a";
+        cfio::Interface iface;
+        iface.id = "i1";
+        d.interfaces.push_back(iface);
+        cfio::validate(d);
+    }, "and validate() still refuses an empty type");
+}
+
+// The cross product of the carry rule, run against the SHARED oracle
+// conformance/fixtures/unknown_vocabulary_cases.json. The Python cells are in
+// conformance/test_unknown_vocabulary_roundtrip.py, over the same documents and
+// the same cells, so the two implementations are measured against one file and
+// never against each other. Axes: two documents (the plain one, and the one
+// whose interface meets a pad with a KNOWN io_class, which is rule 8 and was the
+// third refusal site), validate on and off, load and load-then-dump.
+void test_unknown_vocabulary_is_carried_across_the_cross_product() {
+    const YAML::Node& oracle = vocabulary_oracle();
+    const std::string unknown = oracle["unknown_type"].as<std::string>();
+    const int notes_expected = oracle["expect"]["notes_per_load"].as<int>();
+    int cells = 0;
+    for (const auto& doc : oracle["documents"]) {
+        const std::string file = doc["file"].as<std::string>();
+        const std::string iface_id = doc["interface"].as<std::string>();
+        const std::string text = read_file(kFixturesDir + "/" + file);
+        check(!text.empty(), file + ": the fixture is where the oracle says");
+        for (const auto& cell : oracle["cells"]) {
+            ++cells;
+            const bool validate = cell["validate"].as<bool>();
+            const std::string path = cell["path"].as<std::string>();
+            const std::string tag =
+                file + " validate=" + (validate ? "true" : "false") + " " + path;
+
+            std::vector<std::string> notes;
+            cfio::LoadOptions opts;
+            opts.validate = validate;
+            opts.on_warn = [&notes](const std::string& m) {
+                notes.push_back(m);
+            };
+            cfio::ChipletDocument parsed;
+            check_no_throw([&] { parsed = cfio::loads(text, opts); },
+                           tag + ": loads without refusing");
+
+            const cfio::Interface* found = nullptr;
+            for (const auto& iface : parsed.interfaces) {
+                if (iface.id == iface_id) found = &iface;
+            }
+            check(found != nullptr && found->type == unknown,
+                  tag + ": the unknown type is carried verbatim");
+
+            // Exactly one note per load on the NORMATIVE channel, under either
+            // setting of the flag. The note is produced at parse for that
+            // reason: a consumer running with validate=false is the one most
+            // likely to meet a document from a newer minor.
+            check(static_cast<int>(notes.size()) == notes_expected,
+                  tag + ": one note per load on on_warn");
+            check(!notes.empty() &&
+                      notes[0].find(unknown) != std::string::npos,
+                  tag + ": and the note names the type");
+
+            // Undeduplicated: two loads in one process, two notes.
+            check_no_throw([&] { cfio::loads(text, opts); },
+                           tag + ": loads a second time");
+            check(static_cast<int>(notes.size()) == 2 * notes_expected,
+                  tag + ": the note is not deduplicated");
+
+            if (path == "load_then_dump") {
+                cfio::DumpOptions dopts;
+                dopts.validate = validate;
+                std::string written;
+                check_no_throw([&] { written = cfio::dumps(parsed, dopts); },
+                               tag + ": writes back without refusing");
+                check(written.find(unknown) != std::string::npos,
+                      tag + ": the writer re-emits the type verbatim");
+                cfio::ChipletDocument again;
+                check_no_throw([&] { again = cfio::loads(written, opts); },
+                               tag + ": and the written file loads again");
+                const cfio::Interface* twice = nullptr;
+                for (const auto& iface : again.interfaces) {
+                    if (iface.id == iface_id) twice = &iface;
+                }
+                check(twice != nullptr && twice->type == unknown,
+                      tag + ": with the same string");
+            }
+        }
+    }
+    check(cells == 8, "the oracle still carries the whole cross product");
+
+    // The vocabulary is exported so a consumer can refuse the ELEMENT, which is
+    // what makes the MINOR label true rather than aspirational. A C++ consumer
+    // could not do it while the list lived in the translation unit.
+    check(cfio::kKnownInterfaceTypes.size() == 5,
+          "the known-type vocabulary is reachable from the header");
+    check(!cfio::is_known_interface_type(unknown) &&
+              cfio::is_known_interface_type("micro_bump"),
+          "and the membership test with it");
 }
 
 // One document per member of the closed vocabulary of validation rule 4. That
@@ -932,6 +1070,16 @@ int main() {
         return 1;
     }
 
+    const std::string vocabulary_cases = vocabulary_oracle_path();
+    if (!std::filesystem::exists(vocabulary_cases)) {
+        std::cerr << "  FAIL: unknown-vocabulary oracle not found at "
+                  << vocabulary_cases << "\n"
+                  << "        (set CHIPLET_VOCABULARY_ORACLE to the path of "
+                     "conformance/fixtures/unknown_vocabulary_cases.json)\n";
+        std::cout << "1 checks, 1 failures\nFAILED\n";
+        return 1;
+    }
+
     test_roundtrip_canonical_example();
     test_all_example_chiplets_parse();
     test_missing_format_version_rejected();
@@ -941,7 +1089,8 @@ int main() {
     test_intermediate_refused_then_allowed();
     test_dump_roundtrips_components_order();
     test_attachment_surface_z_roundtrip();
-    test_unknown_interface_type_rejected();
+    test_unknown_interface_type_is_carried_not_refused();
+    test_unknown_vocabulary_is_carried_across_the_cross_product();
     test_every_known_interface_type_is_accepted();
     test_pad_usage_rule_refuses_a_mismatched_pad();
     test_flow_block_is_the_exact_source_slice();

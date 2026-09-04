@@ -52,6 +52,10 @@ SCHEMA_NEGATIVE = {
     "v1_0_unquoted_numeric.chiplet": "format_version written unquoted",
     "v1_0_malformed_version.chiplet": "format_version is not MAJOR.MINOR",
     "v1_0_missing_version.chiplet": "no format_version at all",
+    "v1_0_unknown_interface_type.chiplet":
+        "an interfaces[].type outside the closed enum",
+    "v1_0_unknown_type_meets_known_io_class.chiplet":
+        "the same, on an interface that meets a pad with a known io_class",
 }
 
 #: The ONLY documents where the structural schema and the reference reader
@@ -81,6 +85,26 @@ DIVERGENCES = {
     "v0_9_lower_major.chiplet": {
         "schema": True, "reader": False,
         "why": "Same as v2_0_higher_major, on the low side.",
+    },
+    "v1_0_unknown_interface_type.chiplet": {
+        "schema": False, "reader": True,
+        "why": "An interfaces[].type outside the closed vocabulary. This is the "
+               "divergence the SPEC-32 ruling is: the schema closes the "
+               "vocabulary and binds WRITERS, and the reference readers carry "
+               "the string, because a reader that refuses the DOCUMENT turns "
+               "every future enum member into a MAJOR for everyone downstream. "
+               "A consumer that cannot act on the member refuses the ELEMENT, "
+               "which is what KNOWN_INTERFACE_TYPES and the C++ "
+               "kKnownInterfaceTypes are exported for.",
+    },
+    "v1_0_unknown_type_meets_known_io_class.chiplet": {
+        "schema": False, "reader": True,
+        "why": "The same divergence at the THIRD refusal site: the interface "
+               "meets a pad whose io_class has a row in rule 8's table, so an "
+               "unrecognised type matched no allowed entry and read as a "
+               "violation. Rule 8 relates two closed vocabularies and a member "
+               "of neither is outside its domain, so it is skipped the way an "
+               "unrecognised io_class already was.",
     },
     "v1_0_interface_pad_mismatch.chiplet": {
         "schema": True, "reader": False,
