@@ -34,14 +34,19 @@ SPLITS = CASES["splits"]
 REFUSE = CASES["refuse"]
 NOT_DELIMITABLE = CASES["not_delimitable"]
 
-#: The three kinds of refusal, kept apart because they describe different SHAPES
-#: of document: a quoted key at column zero is valid YAML nobody can split; a
-#: repeated top-level key is a document no reader may read and no splitter may
-#: attribute; a forbidden line break is a document no reader may read while the
-#: splitter has a perfectly good answer for it (those bytes are not line breaks to
-#: the grammar, so no block starts there), which is why the grammar case for it
-#: stays under splits. The VERDICT is a separate field, read just below.
+#: The four kinds of refusal, kept apart because they describe different SHAPES
+#: of document: a quoted key at column zero is valid YAML nobody can split; an
+#: unattributable line at column zero is the same statement generalised, and is
+#: what the reference WRITER used to be able to emit (an explicit key, a bare key
+#: outside the grammar); a repeated top-level key is a document no reader may read
+#: and no splitter may attribute; a forbidden line break is a document no reader
+#: may read while the splitter has a perfectly good answer for it (those bytes are
+#: not line breaks to the grammar, so no block starts there), which is why the
+#: grammar case for it stays under splits. The VERDICT is a separate field, read
+#: just below.
 NOT_SPLITTABLE = [c for c in REFUSE if c["kind"] == "quoted_key_at_column_zero"]
+UNATTRIBUTABLE = [c for c in REFUSE
+                  if c["kind"] == "unattributable_line_at_column_zero"]
 ILL_FORMED = [c for c in REFUSE if c["kind"] == "repeated_top_level_key"]
 FORBIDDEN_LINE_BREAK = [c for c in REFUSE if c["kind"] == "forbidden_line_break"]
 
@@ -123,11 +128,20 @@ def test_oracle_is_wellformed():
     # (which an implementation anchoring on ECMAScript's narrower dot gets wrong).
     assert '"flow":' in REJECT
     assert any("crlf" in c["name"] for c in SPLITS)
-    # All three refusal kinds are present. A kind that quietly empties out takes
+    # All four refusal kinds are present. A kind that quietly empties out takes
     # its whole parametrized test with it and leaves a green run behind.
-    assert NOT_SPLITTABLE and ILL_FORMED and FORBIDDEN_LINE_BREAK
-    assert (len(NOT_SPLITTABLE) + len(ILL_FORMED)
+    assert NOT_SPLITTABLE and UNATTRIBUTABLE and ILL_FORMED \
+        and FORBIDDEN_LINE_BREAK
+    assert (len(NOT_SPLITTABLE) + len(UNATTRIBUTABLE) + len(ILL_FORMED)
             + len(FORBIDDEN_LINE_BREAK)) == len(REFUSE)
+    # The two writer spellings the unattributable kind exists for. Named, because
+    # they are what SPEC-41 was: our own writer emitting a document its own
+    # splitter mis-attributes, and a kind carrying only the tab case would look
+    # like a tidy-up of an edge nobody meets.
+    assert any('\n? ' in c["doc"] for c in UNATTRIBUTABLE), \
+        "the explicit-key spelling the writer emits is not in the oracle"
+    assert any("\na b:" in c["doc"] for c in UNATTRIBUTABLE), \
+        "the bare-key-with-a-space spelling the writer emits is not in the oracle"
     # Both shapes of the disagreement, for EVERY code point in the set, and the
     # set is read off the file rather than named here: naming it here is how the
     # rule shipped with three of its four members. One shape alone certifies one
@@ -180,6 +194,18 @@ def test_oracle_refuse_case_is_wellformed(case):
         assert quoted, "the case must carry a quoted key at column zero"
         # Valid YAML, so it loads; "writes" is a statement about a source-slice
         # writer and only means anything for a document a reader can hold.
+        assert case["loads"] is True
+        assert isinstance(case["writes"], bool)
+    elif case["kind"] == "unattributable_line_at_column_zero":
+        # The generalisation, on the same terms as the quoted key: valid YAML
+        # nobody can attribute. The case has to carry a line the rule actually
+        # fires on, and it must not be the QUOTED spelling, which keeps its own
+        # kind and its own message.
+        offending = [ln for ln in case["doc"].split("\n")
+                     if cfio._is_unattributable(ln)]
+        assert offending, "the case must carry an unattributable line"
+        assert not any(_QUOTED_KEY.match(ln) for ln in offending), \
+            "a quoted key belongs under quoted_key_at_column_zero"
         assert case["loads"] is True
         assert isinstance(case["writes"], bool)
     elif case["kind"] == "repeated_top_level_key":
@@ -360,12 +386,21 @@ def test_the_writer_escapes_what_the_reader_refuses(code_point):
 
 
 @pytest.mark.parametrize("case", NOT_DELIMITABLE, ids=lambda c: c["name"])
-def test_a_flow_block_the_grammar_cannot_delimit_splits_without_a_flow_key(case):
-    # And the split succeeds; it just has no flow block to hand over. That is the
-    # signal a source-slice writer refuses on (the C++ reference: flow_source
-    # NotDelimitable, dumps() throws). This reader's dumps() re-emits from the
-    # dict and never claimed byte-exactness, so there is nothing here to refuse.
-    assert "flow" not in cfio.top_level_blocks(case["doc"])
+def test_a_flow_block_the_grammar_cannot_delimit_is_not_splittable(case):
+    # The split verdict for these two documents MOVED with the unattributable
+    # line rule, and it moved in the direction the rule exists for. Both carry a
+    # line at column zero that no top-level key owns (`flow :`, and a whole
+    # document written in flow style), so what used to be "the split succeeds and
+    # simply has no flow block" is now "nobody can say who owns those bytes":
+    # YAML reads a `flow` key from both and the grammar reads none, which is the
+    # split-versus-parse disagreement, not a missing convenience.
+    #
+    # The document still LOADS (asserted just above, flow rule 1), and the C++
+    # reference's write refusal is unchanged: `not_splittable` was already one of
+    # the two ways a flow block ends up with no slice.
+    with pytest.raises(cfio.ChipletFormatError) as excinfo:
+        cfio.top_level_blocks(case["doc"])
+    assert "column zero" in str(excinfo.value), str(excinfo.value)
 
 
 # --- (c) the floor guard: the set is DERIVED, never written down -----------
@@ -543,3 +578,4 @@ def test_the_other_two_escapes_are_deliberately_unchanged(code_point, escape):
                        "assembly": {"name": "a" + chr(int(code_point[2:], 16)) + "b"},
                        "components": []}, validate=False)
     assert escape in text
+

@@ -142,6 +142,25 @@ const std::regex& quoted_key_line_re() {
     return re;
 }
 
+// A BLOCK SEQUENCE ENTRY at column zero: `-` followed by a space, a tab or
+// nothing. Not a key line, and the one non-key line at column zero that IS
+// attributable: PyYAML writes a block sequence under a mapping key at the
+// parent's indentation, so `components:` followed by `- id: ...` lines is what
+// every generated document in this ecosystem looks like. The entry belongs to
+// the key whose block it sits in, and the splitter and a parser agree that it
+// does.
+const std::regex& sequence_entry_re() {
+    static const std::regex re(R"RX(-(?:[ \t][^\n]*)?)RX");
+    return re;
+}
+
+// A document marker, `---` or `...`, alone or introducing a value. Not a key
+// line and owned by no top-level key: it lands in the preamble.
+const std::regex& document_marker_re() {
+    static const std::regex re(R"RX((?:---|\.\.\.)(?:[ \t][^\n]*)?)RX");
+    return re;
+}
+
 // The part of a line the grammar matches: no LF, one optional trailing CR
 // removed, so a CRLF document reads exactly like an LF one.
 std::string line_content(const std::string& line) {
@@ -156,6 +175,35 @@ std::string top_level_key(const std::string& content) {
     std::smatch match;
     if (!std::regex_match(content, match, key_line_re())) return std::string();
     return match[1].str();
+}
+
+// Is this line content at column zero with no top-level key that owns it?
+//
+// The generalisation of the quoted-key rule, and the property it protects is the
+// one SPEC-36 named: the split and the parse must not disagree about a
+// document's top-level keys. A line at column zero that is not a key line starts
+// no block, so a splitter attaches it to the PRECEDING key, whose owner
+// regenerates it away on the next re-export, while a YAML parser reads a
+// top-level key the split never saw.
+//
+// Column zero is "does not start with a space". A tab is therefore column zero,
+// deliberately: this grammar has no notion of tab indentation, and YAML has none
+// either in block context (measured on PyYAML 6.0.3 and yaml-cpp 0.8.0: both
+// refuse a tab-indented mapping outright), so a tab-led line is never one an
+// implementation may quietly attribute to the open block.
+//
+// Five shapes at column zero are attributable and are not this: a blank line, a
+// comment (`#`) or a directive (`%`), a document marker, a block sequence entry,
+// and a key line.
+bool is_unattributable(const std::string& content) {
+    if (content.find_first_not_of(" \t\r\f\v") == std::string::npos) {
+        return false;
+    }
+    const char first = content[0];
+    if (first == ' ' || first == '#' || first == '%') return false;
+    if (std::regex_match(content, document_marker_re())) return false;
+    if (std::regex_match(content, sequence_entry_re())) return false;
+    return top_level_key(content).empty();
 }
 
 // Put the document's top-level keys back to bare after a pass that quoted every
@@ -196,11 +244,14 @@ std::string unquote_top_level_keys(const std::string& text) {
 //
 // Two outcomes that are not a successful split, and they are different things:
 //
-//   * a QUOTED key at column zero makes the document NOT SPLITTABLE. It is valid
-//     YAML and a reader must still load it (flow rule 1), so this is reported
-//     through `not_splittable` rather than thrown: the blocks returned alongside
-//     it mis-attribute that key's body to the preceding block and no caller may
-//     use them.
+//   * an UNATTRIBUTABLE line at column zero makes the document NOT SPLITTABLE:
+//     a quoted key, an explicit key (`? ...`), a bare key outside the grammar
+//     (`a b:`), or anything else there that is not a key line, a comment, a
+//     directive, a document marker or a block sequence entry. It is valid YAML
+//     and a reader must still load it (flow rule 1), so this is reported through
+//     `not_splittable` rather than thrown: the blocks returned alongside it
+//     mis-attribute those bytes to the preceding block and no caller may use
+//     them.
 //   * a REPEATED top-level key makes the document ill-formed, and that one
 //     throws. PyYAML resolves such a key to the last value and yaml-cpp to the
 //     first, so no reading of it is conforming and there is nothing to hand back.
@@ -234,16 +285,34 @@ std::vector<std::pair<std::string, std::string>> split_top_level_blocks(
             }
             blocks.emplace_back(key, std::string());
             current = blocks.size() - 1;
-        } else if (std::regex_match(content, quoted_key_line_re()) &&
-                   not_splittable != nullptr && not_splittable->empty()) {
-            *not_splittable =
-                "line " + std::to_string(number) + ": quoted key at column zero (" +
-                content +
-                "). A quoted key is valid YAML but does not start a top-level "
-                "block, so this document cannot be split without attaching the "
-                "block to the preceding key, where its owner drops it on the next "
-                "re-export. Emit bare keys and quote values "
-                "(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).";
+        } else if (is_unattributable(content) && not_splittable != nullptr &&
+                   not_splittable->empty()) {
+            if (std::regex_match(content, quoted_key_line_re())) {
+                *not_splittable =
+                    "line " + std::to_string(number) +
+                    ": quoted key at column zero (" + content +
+                    "). A quoted key is valid YAML but does not start a "
+                    "top-level block, so this document cannot be split without "
+                    "attaching the block to the preceding key, where its owner "
+                    "drops it on the next re-export. Emit bare keys and quote "
+                    "values "
+                    "(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).";
+            } else {
+                *not_splittable =
+                    "line " + std::to_string(number) +
+                    ": unattributable line at column zero (" + content +
+                    "). It is not a key line, and not a comment, a document "
+                    "marker, a directive or a block sequence entry either, so "
+                    "no top-level key owns it: a splitter attaches it to the "
+                    "preceding key, where that key's owner drops it on the next "
+                    "re-export, while a YAML parser reads a top-level key the "
+                    "split never saw. The other two spellings the Python writer "
+                    "produces for a key it cannot write bare are the explicit "
+                    "key (`? ...` with its `: ...` value line) and a bare key "
+                    "outside the grammar (`a b:`). Emit top-level keys as key "
+                    "lines "
+                    "(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).";
+            }
         }
         blocks[current].second += line;
         start = end;
@@ -877,10 +946,13 @@ ChipletDocument loads(const std::string& text, const LoadOptions& opts) {
     }
 
     // The grammar runs over the SOURCE TEXT, which is the only place the exact
-    // bytes of a block exist. A quoted key at column zero leaves the document
-    // NOT SPLITTABLE (`not_splittable` explains why and the blocks must not be
-    // used); the document itself is valid and is still read, because flow rule 1
-    // says a reader that cannot handle the flow block must not reject the file.
+    // bytes of a block exist. An unattributable line at column zero (a quoted
+    // key, an explicit key, a bare key outside the grammar, anything else there
+    // that is not a key line, a comment, a directive, a document marker or a
+    // sequence entry) leaves the document NOT SPLITTABLE (`not_splittable`
+    // explains why and the blocks must not be used); the document itself is
+    // valid and is still read, because flow rule 1 says a reader that cannot
+    // handle the flow block must not reject the file.
     // What that costs is the ability to write it back, and that is where it is
     // charged: see dumps().
     std::string not_splittable;
@@ -1058,9 +1130,10 @@ static std::string dumps_text(const ChipletDocument& doc,
         throw ChipletFormatError(
             "this document carries a flow block the top-level block grammar "
             "could not delimit (it is not written as a bare `flow:` key line at "
-            "column zero, or the file has a quoted key at column zero), so its "
-            "source bytes were never captured and flow rule 4 cannot be honoured "
-            "on write. Re-author the flow through this host before saving "
+            "column zero, or the file is not splittable at all because some line "
+            "at column zero is one no top-level key owns), so its source bytes "
+            "were never captured and flow rule 4 cannot be honoured on write. "
+            "Re-author the flow through this host before saving "
             "(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar)");
     }
     if (opts.validate) {

@@ -703,8 +703,10 @@ def loads(text: str, *, allow_intermediate: bool = False, validate: bool = True,
     anything is read out of it. That is not a style rule: PyYAML keeps the last
     value and yaml-cpp the first, so this reader and the C++ one would report
     different documents from one file, and nothing downstream, schema included,
-    can tell. A quoted key at column zero makes a document unsplittable, not
-    invalid, and is read normally (see :func:`top_level_blocks` and flow rule 1).
+    can tell. A line at column zero that no top-level key owns (a quoted key, an
+    explicit key, a bare key outside the grammar) makes a document unsplittable,
+    not invalid, and is read normally (see :func:`top_level_blocks` and flow
+    rule 1).
 
     Refuses, for the same reason and ahead of the YAML parse rather than after
     it, a document whose line breaks are not LF or CRLF: NEL (U+0085), U+2028 or
@@ -864,6 +866,20 @@ _KEY_LINE_RE = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:\s.*)?\Z")
 _QUOTED_KEY_LINE_RE = re.compile(
     r"""^(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'):(?:\s.*)?\Z""")
 
+#: A BLOCK SEQUENCE ENTRY at column zero: ``-`` followed by a space, a tab or
+#: nothing at all. It is not a key line, and it is the one non-key line at column
+#: zero that IS attributable: PyYAML writes a block sequence under a mapping key
+#: at the parent's indentation, so ``components:`` followed by ``- id: ...``
+#: lines is what every generated document in this ecosystem looks like (68 such
+#: lines across the 77 tracked ``.chiplet`` when the rule below was written). The
+#: entry belongs to the key whose block it sits in, and both a splitter and a
+#: parser agree that it does.
+_SEQUENCE_ENTRY_RE = re.compile(r"^-(?:[ \t].*)?\Z")
+
+#: A document marker, ``---`` or ``...``, alone or introducing a value. Not a key
+#: line and not owned by any top-level key: it lands in the preamble.
+_DOCUMENT_MARKER_RE = re.compile(r"^(?:---|\.\.\.)(?:[ \t].*)?\Z")
+
 #: Key of the PREAMBLE bucket: the lines before the first key line (a leading
 #: ``---``, a file header comment). They belong to no top-level key.
 PREAMBLE_KEY = ""
@@ -905,15 +921,54 @@ def top_level_key(line_content: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _is_unattributable(line_content: str) -> bool:
+    """Is this line content at column zero with no top-level key that owns it?
+
+    The generalisation of the quoted-key rule, and the property it protects is
+    the one SPEC-36 named: the split and the parse must not disagree about the
+    document's top-level keys. A line at column zero that is not a key line
+    starts no block, so a splitter attaches it to the PRECEDING key, whose owner
+    regenerates it away on the next re-export, while a YAML parser reads a
+    top-level key the split never saw.
+
+    Column zero is "does not start with a space". A tab is therefore column
+    zero, deliberately: this grammar has no notion of tab indentation, and YAML
+    has none either in block context (measured on PyYAML 6.0.3 and yaml-cpp
+    0.8.0: both refuse a tab-indented mapping outright), so a tab-led line is
+    never a line an implementation may quietly attribute to the open block.
+
+    Five shapes at column zero are attributable and are not this:
+
+    * a blank line, which belongs to whatever block it sits in;
+    * a comment (``#``) and a directive (``%``), on the same terms;
+    * a document marker (``---``, ``...``), which belongs to the preamble;
+    * a BLOCK SEQUENCE ENTRY (``-`` then a space, a tab or end of line), which
+      belongs to the key whose block it sits in. This one is not a nicety: it is
+      how PyYAML writes every ``components:`` list this ecosystem produces, and
+      a rule without it would call almost every real document unsplittable;
+    * a key line, which opens a block of its own.
+    """
+    if not line_content.strip():
+        return False
+    if line_content[0] in " #%":
+        return False
+    if _DOCUMENT_MARKER_RE.match(line_content):
+        return False
+    if _SEQUENCE_ENTRY_RE.match(line_content):
+        return False
+    return top_level_key(line_content) is None
+
+
 def _scan_top_level(text: str) -> Tuple[Dict[str, str], Optional[str]]:
     """One pass over the source text: the blocks, and why they may be unusable.
 
     Returns ``(blocks, not_splittable)``. ``not_splittable`` is ``None`` for a
     document that can be split, and otherwise the reason it cannot be, which the
     splitting accessors raise and :func:`loads` ignores. The two are different
-    verdicts: a quoted key at column zero leaves nobody able to say who owns
-    those bytes, and that is a reason not to SPLIT or WRITE the document, not a
-    reason to refuse to read it.
+    verdicts: a line at column zero that is not a key line and not one of the
+    attributable shapes (see :func:`_is_unattributable`) leaves nobody able to
+    say who owns those bytes, and that is a reason not to SPLIT or WRITE the
+    document, not a reason to refuse to read it.
 
     Raises :class:`ChipletFormatError` for a REPEATED top-level key, which is a
     different thing again: that document is ill-formed and every caller here,
@@ -938,14 +993,30 @@ def _scan_top_level(text: str) -> Tuple[Dict[str, str], Optional[str]]:
                     f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
             current = key
             blocks[key] = ""
-        elif not_splittable is None and _QUOTED_KEY_LINE_RE.match(content):
-            not_splittable = (
-                f"line {number}: quoted key at column zero ({content!r}). A "
-                f"quoted key is valid YAML but does not start a top-level "
-                f"block, so this document cannot be split without attaching "
-                f"the block to the preceding key, where its owner drops it on "
-                f"the next re-export. Emit bare keys and quote values "
-                f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
+        elif not_splittable is None and _is_unattributable(content):
+            if _QUOTED_KEY_LINE_RE.match(content):
+                not_splittable = (
+                    f"line {number}: quoted key at column zero ({content!r}). "
+                    f"A quoted key is valid YAML but does not start a "
+                    f"top-level block, so this document cannot be split "
+                    f"without attaching the block to the preceding key, where "
+                    f"its owner drops it on the next re-export. Emit bare keys "
+                    f"and quote values "
+                    f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
+            else:
+                not_splittable = (
+                    f"line {number}: unattributable line at column zero "
+                    f"({content!r}). It is not a key line, and not a comment, "
+                    f"a document marker, a directive or a block sequence entry "
+                    f"either, so no top-level key owns it: a splitter attaches "
+                    f"it to the preceding key, where that key's owner drops it "
+                    f"on the next re-export, while a YAML parser reads a "
+                    f"top-level key the split never saw. The other two "
+                    f"spellings the Python writer produces for a key it cannot "
+                    f"write bare are the explicit key (`? ...` with its `: ...` "
+                    f"value line) and a bare key outside the grammar (`a b:`). "
+                    f"Emit top-level keys as key lines "
+                    f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
         blocks[current] += line
     if not blocks[PREAMBLE_KEY]:
         del blocks[PREAMBLE_KEY]
@@ -963,10 +1034,13 @@ def top_level_blocks(text: str) -> Dict[str, str]:
 
     Raises :class:`ChipletFormatError` twice over, for two different reasons:
 
-    * a quoted key at column zero. It is not a key line, so splitting would
-      attach that block to the preceding key and lose it on the next re-export.
-      The document is still valid and :func:`loads` still reads it; splitting is
-      what cannot be done.
+    * an unattributable line at column zero: a quoted key, an explicit key
+      (``? ...``), a bare key outside the grammar (``a b:``), or anything else
+      there that is not a key line, a comment, a directive, a document marker or
+      a block sequence entry. It starts no block, so splitting would attach
+      those bytes to the preceding key and lose them on the next re-export while
+      a parser reads a key the split never saw. The document is still valid and
+      :func:`loads` still reads it; splitting is what cannot be done.
     * a repeated top-level key. That document is ill-formed and :func:`loads`
       refuses it too.
     """
