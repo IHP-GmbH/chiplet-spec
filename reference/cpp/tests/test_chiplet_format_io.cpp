@@ -359,6 +359,96 @@ void test_flow_block_the_grammar_cannot_delimit_loads_but_does_not_write() {
                    "and writes back without complaint");
 }
 
+// The format's line breaks are LF and CRLF. NEL, U+2028 and U+2029 anywhere in a
+// document make it ill-formed, and both reference readers refuse it on the TEXT,
+// before their parser sees it, because the two parsers do not agree on what the
+// document is: measured on PyYAML 6.0.3 and yaml-cpp 0.8.0, the smuggle shape
+// gives PyYAML a second top-level key and throws here, and the plain-scalar
+// shape loads here and throws in PyYAML. So this cannot be checked as "loads()
+// throws": yaml-cpp throws on half of these cases anyway, with a message about a
+// map value that names neither the character nor the reason. The message is the
+// assertion.
+void test_forbidden_line_breaks_are_refused_with_a_text_level_reason() {
+    const YAML::Node& oracle = block_oracle();
+    int cases = 0;
+    for (const auto& c : oracle["refuse"]) {
+        if (c["kind"].as<std::string>() != "forbidden_line_break") continue;
+        ++cases;
+        const std::string name = c["name"].as<std::string>();
+        const std::string doc = c["doc"].as<std::string>();
+        const std::string code_point = c["code_point"].as<std::string>();
+        const std::string line = "line " + c["line"].as<std::string>();
+        for (bool validate : {true, false}) {
+            cfio::LoadOptions opts;
+            opts.validate = validate;
+            std::string message;
+            try {
+                cfio::loads(doc, opts);
+            } catch (const cfio::ChipletFormatError& e) {
+                message = e.what();
+            }
+            const std::string tag =
+                name + (validate ? " (validate on)" : " (validate off)");
+            check(message.find(code_point) != std::string::npos,
+                  tag + ": the refusal names " + code_point);
+            check(message.find(line) != std::string::npos,
+                  tag + ": the refusal names the " + line);
+            check(message.find("LF and CRLF") != std::string::npos,
+                  tag + ": and says what the line-break set is");
+            check(message.find("YAML parse error") == std::string::npos,
+                  tag + ": and is the format's refusal, not yaml-cpp's");
+        }
+    }
+    check(cases == 6,
+          "the oracle carries both shapes of all three forbidden line breaks");
+}
+
+// The writer half of the same rule, and it needs doing rather than asserting:
+// yaml-cpp writes all three as RAW bytes in every style, double-quoted included
+// (measured on 0.8.0), so a document a host built with one in a field would be
+// written out as a file neither reference reader will open again.
+void test_the_writer_escapes_what_the_reader_refuses() {
+    const std::string raw[3] = {"\xC2\x85", "\xE2\x80\xA8", "\xE2\x80\xA9"};
+    const std::string escaped[3] = {"\\N", "\\L", "\\P"};
+    for (int i = 0; i < 3; ++i) {
+        cfio::ChipletDocument doc;
+        doc.format_version = cfio::SUPPORTED_FORMAT_VERSION;
+        doc.assembly.name = "demo" + raw[i] + "x";
+        const std::string text = cfio::dumps(doc);
+        check(text.find(raw[i]) == std::string::npos,
+              escaped[i] + ": no raw code point reaches the file");
+        // The SPELLING of the escape is the emitter's, not the format's, and the
+        // two references differ: PyYAML writes \N, \L and \P, and yaml-cpp
+        // writes \x85 for the first and \L and \P for the other two. Both name
+        // the same character and both round-trip, and the header has always said
+        // the two writers are semantically equivalent, not byte-identical. What
+        // is asserted here is the property: an escape, and the value back.
+        check(text.find(escaped[i]) != std::string::npos ||
+                  text.find("\\x85") != std::string::npos,
+              escaped[i] + ": it is written as an escape");
+        cfio::ChipletDocument reloaded;
+        check_no_throw([&] { reloaded = cfio::loads(text); },
+                       escaped[i] + ": the file this writer produced loads");
+        check(reloaded.assembly.name == doc.assembly.name,
+              escaped[i] + ": and the value round-trips unchanged");
+        // And the other writer rule is not paid for with this one: the pass that
+        // escapes quotes every string, and the top-level keys go back to bare
+        // before the bytes leave, or the file this writer produced could not be
+        // split by the grammar it defines.
+        check(text.rfind("format_version:", 0) == 0,
+              escaped[i] + ": the top-level keys are still bare");
+        check(text.find("\nassembly:") != std::string::npos,
+              escaped[i] + ": every one of them, not just the first");
+    }
+    // The ordinary document is untouched by the rule: the retry that quotes
+    // every string runs only for a document that has one of the three in it.
+    cfio::ChipletDocument plain;
+    plain.format_version = cfio::SUPPORTED_FORMAT_VERSION;
+    plain.assembly.name = "demo";
+    check(cfio::dumps(plain).find("\"name\":") == std::string::npos,
+          "a document without a forbidden line break keeps its nested keys bare");
+}
+
 // A document assembled in memory, not read from a file, may still carry the
 // pre-slice spelling: the flow VALUE with no key line. dumps() wraps that
 // through the node tree so the output keeps a `flow:` key. Lossy, which is why
@@ -857,6 +947,8 @@ int main() {
     test_flow_block_is_the_exact_source_slice();
     test_flow_block_is_re_emitted_byte_for_byte();
     test_quoted_key_at_column_zero_loads_and_may_refuse_to_write();
+    test_forbidden_line_breaks_are_refused_with_a_text_level_reason();
+    test_the_writer_escapes_what_the_reader_refuses();
     test_flow_block_the_grammar_cannot_delimit_loads_but_does_not_write();
     test_hand_built_flow_value_without_a_key_line_still_emits();
     test_interconnect_adapter_and_technology();

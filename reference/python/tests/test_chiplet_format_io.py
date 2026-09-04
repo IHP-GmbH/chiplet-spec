@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 import chiplet_format_io as cfio
 
@@ -109,3 +110,41 @@ def test_source_has_no_gpl_imports():
     assert "import pcbnew" not in src
     assert "import klayout" not in src
     assert "from klayout" not in src
+
+
+def test_a_forbidden_line_break_is_refused_before_the_yaml_parse():
+    """NEL, U+2028 and U+2029 make a document ill-formed, wherever they sit.
+
+    PyYAML implements YAML 1.1 and reads all three as line breaks; yaml-cpp
+    implements YAML 1.2 and does not, so the same bytes are two documents. The
+    refusal is this library's, not PyYAML's: on the smuggle shape below PyYAML
+    does not raise at all, it silently returns a second top-level format_version.
+    """
+    for char, code_point in (("\u0085", "U+0085"), ("\u2028", "U+2028"),
+                             ("\u2029", "U+2029")):
+        smuggle = ('format_version: "1.0"\nassembly:\n  name: demo' + char
+                   + 'format_version: "9.0"\ncomponents: []\n')
+        # What PyYAML alone does with it, which is why the check is here.
+        assert yaml.safe_load(smuggle)["format_version"] == "9.0"
+        for validate in (True, False):
+            with pytest.raises(cfio.ChipletFormatError) as excinfo:
+                cfio.loads(smuggle, validate=validate)
+            assert code_point in str(excinfo.value)
+            assert "line 3" in str(excinfo.value)
+
+
+def test_the_writer_escapes_a_forbidden_line_break():
+    """dumps() must not write bytes loads() refuses, and must not lose the value.
+
+    yaml.safe_dump(allow_unicode=True) writes all three raw into a single-quoted
+    scalar and PyYAML folds them back on the next read, so the value did not
+    survive its own round trip before this.
+    """
+    for char, escape in (("\u0085", "\\N"), ("\u2028", "\\L"),
+                         ("\u2029", "\\P")):
+        doc = {"format_version": "1.0",
+               "assembly": {"name": "demo" + char + "x"}}
+        text = cfio.dumps(doc)
+        assert char not in text
+        assert escape in text
+        assert cfio.loads(text)["assembly"]["name"] == "demo" + char + "x"

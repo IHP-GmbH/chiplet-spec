@@ -32,6 +32,63 @@ namespace {
 // conformance/fixtures/top_level_blocks_cases.json rather than against another
 // implementation. No YAML is parsed by any of this, on purpose.
 
+// --- the line-break set ----------------------------------------------------
+//
+// The format's line breaks are LF and CRLF (docs/CHIPLET_FORMAT_SPEC.md, "Line
+// breaks"). NEL, U+2028 and U+2029 anywhere in a document make it ill-formed,
+// for the same reason a repeated top-level key does: the two reference parsers
+// build DIFFERENT documents out of the same bytes, so no reading is conforming.
+// Measured on PyYAML 6.0.3 and yaml-cpp 0.8.0, and the disagreement runs both
+// ways: `name: demo<LS>` followed by `format_version: "9.0"` gives PyYAML a
+// second top-level key (format_version '9.0') and yaml-cpp an "illegal map
+// value" throw, while the same separator followed by ordinary text loads in
+// yaml-cpp with the three bytes inside the scalar and throws a ScannerError in
+// PyYAML. Neither reader can be made to imitate the other, so the text is
+// refused before either of them sees it.
+struct ForbiddenLineBreak {
+    const char* utf8;
+    const char* name;
+    const char* code_point;
+    const char* escape;
+};
+const std::array<ForbiddenLineBreak, 3> kForbiddenLineBreaks = {{
+    {"\xC2\x85", "Unicode next line", "U+0085", "\\N"},
+    {"\xE2\x80\xA8", "Unicode line separator", "U+2028", "\\L"},
+    {"\xE2\x80\xA9", "Unicode paragraph separator", "U+2029", "\\P"},
+}};
+
+// Refuse a document carrying one of the three, naming the code point and the
+// line. Runs on the TEXT, ahead of yaml-cpp: on such a document yaml-cpp either
+// throws with a message about a map value, which says nothing about the real
+// defect, or accepts bytes PyYAML refuses. All three are invisible in an editor,
+// so a bare "invalid document" would send the author looking at the wrong thing.
+void check_line_breaks(const std::string& text) {
+    int line = 1;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\n') { ++line; continue; }
+        for (const ForbiddenLineBreak& bad : kForbiddenLineBreaks) {
+            const std::size_t len = std::char_traits<char>::length(bad.utf8);
+            if (text.compare(i, len, bad.utf8) != 0) continue;
+            throw ChipletFormatError(
+                "line " + std::to_string(line) + ": " + bad.name + " (" +
+                bad.code_point + ") inside a scalar. A document's line breaks "
+                "are LF and CRLF. A YAML 1.1 parser (PyYAML) treats NEL "
+                "(U+0085), LS (U+2028) and PS (U+2029) as line breaks and a "
+                "YAML 1.2 parser (yaml-cpp) does not, so the same bytes are two "
+                "different documents and neither reading is conforming. Escape "
+                "it in a double-quoted scalar (\\N, \\L, \\P) "
+                "(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).");
+        }
+    }
+}
+
+bool has_forbidden_line_break(const std::string& text) {
+    for (const ForbiddenLineBreak& bad : kForbiddenLineBreaks) {
+        if (text.find(bad.utf8) != std::string::npos) return true;
+    }
+    return false;
+}
+
 // A KEY LINE: a bare key at column zero, optionally followed by whitespace and a
 // value or a comment. Used with regex_match, which anchors both ends, so there
 // is no end anchor to get wrong ($ is wrong in Python, \Z does not exist in
@@ -69,6 +126,36 @@ std::string top_level_key(const std::string& content) {
     std::smatch match;
     if (!std::regex_match(content, match, key_line_re())) return std::string();
     return match[1].str();
+}
+
+// Put the document's top-level keys back to bare after a pass that quoted every
+// string. The grammar's writer rule (docs/CHIPLET_FORMAT_SPEC.md, "Top-level
+// keys are written bare") is what lets any host split the file, and no writer
+// here may break it to satisfy another rule. The rewrite is exact rather than
+// hopeful: only this writer's own literal key names ever reach column zero (every
+// data-derived key is nested), and a line is un-quoted precisely when the
+// unquoted form is a key line under the grammar above. Nested keys keep their
+// quotes, which the grammar has nothing to say about.
+std::string unquote_top_level_keys(const std::string& text) {
+    std::string out;
+    std::size_t start = 0;
+    while (start < text.size()) {
+        const std::size_t nl = text.find('\n', start);
+        const std::size_t end = (nl == std::string::npos) ? text.size() : nl + 1;
+        std::string line = text.substr(start, end - start);
+        const std::string content = line_content(line);
+        const std::size_t close = content.find("\":");
+        if (!content.empty() && content[0] == '"' && close != std::string::npos) {
+            const std::string bare =
+                content.substr(1, close - 1) + content.substr(close + 1);
+            if (!top_level_key(bare).empty()) {
+                line = bare + line.substr(content.size());
+            }
+        }
+        out += line;
+        start = end;
+    }
+    return out;
 }
 
 // Split a document into its top-level blocks, in document order, each one the
@@ -717,6 +804,12 @@ void validate(const ChipletDocument& doc, bool allow_intermediate,
 }
 
 ChipletDocument loads(const std::string& text, const LoadOptions& opts) {
+    // Before yaml-cpp, deliberately: on a document carrying one of the three
+    // forbidden line breaks the two reference parsers disagree about what the
+    // document even is, and once a parser has been over the bytes the evidence
+    // is gone. The Python reference runs the same check in the same position.
+    check_line_breaks(text);
+
     YAML::Node root;
     try {
         root = YAML::Load(text);
@@ -875,7 +968,17 @@ ChipletDocument load(const std::string& path, const LoadOptions& opts) {
     return loads(buffer.str(), opts);
 }
 
-std::string dumps(const ChipletDocument& doc, const DumpOptions& opts) {
+// The emit pass. `quote_all_strings` is not a caller-facing option and never
+// becomes one: it is the second half of the writer's line-break rule. yaml-cpp
+// writes NEL, U+2028 and U+2029 as RAW bytes in every style, double-quoted
+// included (measured on 0.8.0), and re-escaping them in the finished text is
+// only sound where the scalar carrying them is double-quoted. So when the first
+// pass turns out to contain one, the document is emitted a second time with
+// every string double-quoted and the raw bytes are then replaced by \N, \L and
+// \P. The retry costs one extra emit for a document that should not exist, and
+// the ordinary path pays a substring search.
+static std::string dumps_text(const ChipletDocument& doc,
+                              const DumpOptions& opts, bool quote_all_strings) {
     // Not validation, and so not under opts.validate: this document simply
     // cannot be written. It was read from a file whose flow block the top-level
     // block grammar could not delimit, so the block's bytes were never captured.
@@ -899,6 +1002,7 @@ std::string dumps(const ChipletDocument& doc, const DumpOptions& opts) {
     }
 
     YAML::Emitter out;
+    if (quote_all_strings) out.SetStringFormat(YAML::DoubleQuoted);
     out << YAML::BeginMap;
 
     // Lossy writer (H-B crux): this reconstructs YAML from the struct model,
@@ -1192,6 +1296,26 @@ std::string dumps(const ChipletDocument& doc, const DumpOptions& opts) {
 
     std::string text = std::string(out.c_str()) + "\n";
 
+    // The writer's half of the line-break rule, on the EMITTED section only. A
+    // forbidden code point can only be here because a host put one in a struct
+    // field: after this release no load produces one. The retry is what makes
+    // the replacement below sound, since it is the pass in which every scalar is
+    // double-quoted; the flow slice appended after this point is source bytes
+    // under rule 4 and is never rewritten.
+    if (!quote_all_strings && has_forbidden_line_break(text)) {
+        return dumps_text(doc, opts, /*quote_all_strings=*/true);
+    }
+    if (quote_all_strings) {
+        for (const ForbiddenLineBreak& bad : kForbiddenLineBreaks) {
+            const std::string raw = bad.utf8;
+            for (std::size_t at = text.find(raw); at != std::string::npos;
+                 at = text.find(raw, at + 2)) {
+                text.replace(at, raw.size(), bad.escape);
+            }
+        }
+        text = unquote_top_level_keys(text);
+    }
+
     // The flow block, byte for byte (rule 4). `flow_yaml` is the source slice
     // the reader took, key line included, so it is APPENDED rather than emitted
     // through the node tree: an emitter would re-quote its scalars and drop its
@@ -1217,6 +1341,10 @@ std::string dumps(const ChipletDocument& doc, const DumpOptions& opts) {
     }
 
     return text;
+}
+
+std::string dumps(const ChipletDocument& doc, const DumpOptions& opts) {
+    return dumps_text(doc, opts, /*quote_all_strings=*/false);
 }
 
 void dump(const ChipletDocument& doc, const std::string& path,

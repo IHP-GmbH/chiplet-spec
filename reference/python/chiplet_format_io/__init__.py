@@ -118,6 +118,24 @@ IO_CLASS_INTERFACE_TYPES = {
 }
 
 
+#: The three code points a YAML 1.1 parser breaks lines on and a YAML 1.2 parser
+#: does not, mapped to the name a refusal quotes. They are the format's one
+#: text-level ill-formedness besides a repeated top-level key, and for the same
+#: reason: PyYAML (YAML 1.1) and yaml-cpp (YAML 1.2) build DIFFERENT documents
+#: out of the same bytes, so no reading of them is conforming. Measured, both
+#: directions, on PyYAML 6.0.3 and yaml-cpp 0.8.0: with `name: demo<LS>` followed
+#: by `format_version: "9.0"`, PyYAML reads a second top-level key and returns
+#: format_version '9.0' while yaml-cpp throws "illegal map value"; with the same
+#: separator followed by ordinary text, yaml-cpp loads the three bytes inside the
+#: scalar and PyYAML throws a ScannerError. Neither reader can be made to imitate
+#: the other, so the format refuses the bytes instead.
+_FORBIDDEN_LINE_BREAKS = {
+    "\u0085": "Unicode next line",
+    "\u2028": "Unicode line separator",
+    "\u2029": "Unicode paragraph separator",
+}
+
+
 class ChipletFormatError(ValueError):
     """Raised when a .chiplet document is malformed or unsupported."""
 
@@ -421,6 +439,35 @@ def _apply_write_version(out: Dict[str, Any]) -> None:
         out["format_version"] = SUPPORTED_FORMAT_VERSION
 
 
+def _check_line_breaks(text: str) -> None:
+    """Refuse a document carrying NEL, U+2028 or U+2029, before any YAML parse.
+
+    The format's line breaks are LF and CRLF (docs/CHIPLET_FORMAT_SPEC.md, "Line
+    breaks"). This runs on the TEXT, ahead of ``yaml.safe_load``, for the same
+    reason the repeated-key scan does: once a parser has been over the bytes the
+    evidence is gone, and here the two reference parsers do not even agree on
+    what the bytes are. The refusal names the code point and the line, because
+    all three are invisible in an editor and a bare "invalid document" would send
+    the author looking at the wrong thing.
+    """
+    line = 1
+    for ch in text:
+        if ch == "\n":
+            line += 1
+            continue
+        name = _FORBIDDEN_LINE_BREAKS.get(ch)
+        if name is None:
+            continue
+        raise ChipletFormatError(
+            f"line {line}: {name} (U+{ord(ch):04X}) inside a scalar. A "
+            f"document's line breaks are LF and CRLF. A YAML 1.1 parser "
+            f"(PyYAML) treats NEL (U+0085), LS (U+2028) and PS (U+2029) as "
+            f"line breaks and a YAML 1.2 parser (yaml-cpp) does not, so the "
+            f"same bytes are two different documents and neither reading is "
+            f"conforming. Escape it in a double-quoted scalar (\\N, \\L, \\P) "
+            f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
+
+
 def _validate(data: Dict[str, Any], *, allow_intermediate: bool,
               on_warn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
     if not isinstance(data, dict):
@@ -556,10 +603,18 @@ def loads(text: str, *, allow_intermediate: bool = False, validate: bool = True,
     anything is read out of it. That is not a style rule: PyYAML keeps the last
     value and yaml-cpp the first, so this reader and the C++ one would report
     different documents from one file, and nothing downstream, schema included,
-    can tell. It is the only text-level refusal here; a quoted key at column zero
-    makes a document unsplittable, not invalid, and is read normally (see
-    :func:`top_level_blocks` and flow rule 1).
+    can tell. A quoted key at column zero makes a document unsplittable, not
+    invalid, and is read normally (see :func:`top_level_blocks` and flow rule 1).
+
+    Refuses, for the same reason and ahead of the YAML parse rather than after
+    it, a document carrying NEL (U+0085), U+2028 or U+2029 anywhere: those are
+    line breaks to a YAML 1.1 parser and ordinary characters to a YAML 1.2 one
+    (see :func:`_check_line_breaks`). It runs FIRST because on such a document
+    ``yaml.safe_load`` either raises with a parser message that says nothing
+    about the real defect or, worse, returns a document with a top-level key
+    that is not in the file.
     """
+    _check_line_breaks(text)
     data = yaml.safe_load(text)
     if data is None:
         raise ChipletFormatError("empty .chiplet document")
@@ -604,12 +659,36 @@ def dumps(data: Dict[str, Any], *, validate: bool = True,
         # on write (deduped default channel; every event to on_warn).
         _validate(out, allow_intermediate=True, on_warn=on_warn)
     _apply_write_version(out)
-    return yaml.safe_dump(
+    return yaml.dump(
         out,
+        Dumper=_CanonicalDumper,
         sort_keys=False,
         default_flow_style=False,
         allow_unicode=True,
     )
+
+
+class _CanonicalDumper(yaml.SafeDumper):
+    """SafeDumper that never emits a forbidden line break as a raw character.
+
+    ``yaml.safe_dump(allow_unicode=True)`` writes NEL, U+2028 and U+2029 into a
+    SINGLE-quoted scalar as raw bytes, and PyYAML then reads its own output back
+    as a folded line break: measured, ``{'name': 'demo<LS>x'}`` does not survive
+    a dump/load round trip. Forcing the double-quoted style for exactly those
+    scalars puts the emitter on the path where it already writes ``\\N``, ``\\L``
+    and ``\\P``, so the value round-trips and the bytes on disk are a document
+    this reader still accepts.
+    """
+
+
+def _represent_str(dumper: yaml.SafeDumper, data: str) -> Any:
+    tag = "tag:yaml.org,2002:str"
+    if any(ch in data for ch in _FORBIDDEN_LINE_BREAKS):
+        return dumper.represent_scalar(tag, data, style='"')
+    return dumper.represent_scalar(tag, data)
+
+
+_CanonicalDumper.add_representer(str, _represent_str)
 
 
 def dump(data: Dict[str, Any], path, *, validate: bool = True,

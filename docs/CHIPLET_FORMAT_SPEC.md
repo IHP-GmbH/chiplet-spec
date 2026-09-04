@@ -797,6 +797,9 @@ Three notes, each of which has already cost this format family a defect:
   `assembly.name` of `"demo<U+2028>flow: injected"` becomes a `flow` block that is
   not in the file, and a merge then hands a foreign host bytes that came out of
   somebody's assembly name. Iterate on LF by hand. The oracle carries this case.
+  The SPLITTER's answer for those bytes is settled here; whether a READER may
+  open such a document at all is a different question, settled under
+  [Line breaks](#line-breaks-normative), and the answer there is no.
 
 What follows from the expression, each of these a case in the oracle: an indented
 `  flow:` is not a key line and stays inside the block it sits in; `flow: value`
@@ -804,6 +807,45 @@ and `flow: # note` are key lines (a value or a trailing comment on the key line
 changes nothing); `flow:value` is NOT, because the expression requires whitespace
 between the colon and anything after it; and `---`, `...`, a `#` comment, an empty
 line, a bare `:` and a key containing a space are not key lines.
+
+### Line breaks (normative)
+
+A document's line breaks are **LF** and **CRLF**, and nothing else. NEL
+(`U+0085`), LINE SEPARATOR (`U+2028`) and PARAGRAPH SEPARATOR (`U+2029`) anywhere
+in a document make it **ill-formed**, whether they sit in a scalar, a comment or
+a key, and both reference readers refuse such a document at load, on the text,
+before any YAML parse.
+
+The reason is the same one that makes a repeated top-level key ill-formed: a YAML
+1.1 parser (PyYAML) treats all three as line breaks and a YAML 1.2 parser
+(yaml-cpp) does not, so the same bytes are two different documents and no reading
+of them is conforming. The disagreement is not academic and it runs in both
+directions, measured on PyYAML 6.0.3 and yaml-cpp 0.8.0:
+
+- `name: demo<U+2028>format_version: "9.0"` inside `assembly` gives PyYAML a
+  SECOND top-level `format_version` whose value wins, with the top-level key list
+  unchanged, so the spoof moves a value and not the shape and no
+  "unexpected top-level key" guard sees it; yaml-cpp throws `illegal map value`
+  on the same bytes.
+- The same separator followed by ordinary text flips it: yaml-cpp loads the
+  document with the three bytes inside the scalar, and PyYAML throws.
+
+So neither reader can be made to imitate the other, and the refusal belongs to
+the format rather than to either parser. It names the code point and the line,
+because all three are invisible in an editor.
+
+A WRITER that holds one of the three in a value MUST escape it inside a
+double-quoted scalar (`\N`, `\L`, `\P`, or the equivalent `\xNN`/`\uNNNN`
+spelling its emitter produces) rather than write the raw character, so that what
+it wrote is a document these readers still open. This is not hypothetical for a
+writer built on PyYAML: `yaml.safe_dump(allow_unicode=True)` writes all three raw
+into a single-quoted scalar, and PyYAML then folds them back on the next read, so
+the value does not survive the round trip.
+
+Refusing these three costs nothing on any document that exists: a sweep of every
+`.chiplet` in the ecosystem outside build trees, plus the YAML and stackups
+shipped alongside them, found zero occurrences, and the KiCad plugin found zero
+in 187 `.chiplet`.
 
 ### Top-level keys are written bare
 
@@ -898,9 +940,11 @@ Every implementation is measured against
 [`conformance/fixtures/top_level_blocks_cases.json`](../conformance/fixtures/top_level_blocks_cases.json),
 never against another implementation: accept and reject key lines, documents with
 the exact expected slice per top-level key, the documents a splitter must refuse
-to split, and the documents whose `flow` block has no slice. The three verdicts
-are recorded separately, because a document can be loadable and not splittable,
-and splittable and not writable. Add a case to that file, never to a consumer.
+to split, the documents a reader must refuse to load, and the documents whose
+`flow` block has no slice. The verdicts are recorded separately, because a
+document can be loadable and not splittable, splittable and not writable, and
+splittable and not loadable (a forbidden line break, where the grammar has an
+answer and the readers do not). Add a case to that file, never to a consumer.
 
 ## Data Types and Constraints
 
@@ -1212,3 +1256,4 @@ components:
 | 1.0 | 2026-08-05 | Documented the optional technology `stackup` field: a path to a layer-stackup YAML the technology ships itself, resolved through the same `${VAR}`/relative chain as `layer_properties` and taking priority over a consumer's own stackup lookup for that technology id. The field was already read, written and relied on by Chiplet Studio; it had never been written down here, so the reference C++ reader dropped it on a round-trip while a consumer's vendored copy carried it. Updated the C++ reference (struct/parse/emit); the Python reader already passes it through. Backward compatible and optional; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-07-21 | Added the optional interposer `attachment_surface_z` field: the die-attachment (BEOL-top) mount plane, decoupled from `dimensions.thickness`, which now carries the physical substrate body (extending downward from the attachment surface). Backward compatible: consumers fall back to `dimensions.thickness` as the mount reference when the field is absent, so legacy files seat dies unchanged. Updated the reference readers (C++ struct/parse/emit; the Python reader already passes it through) and the canonical example. No on-disk format change; `format_version` stays `"1.0"`. |
 | 1.0 | 2026-09-01 | Added the optional top-level `interposer` block (a single required `adapter`, the interposer-axis registry id), taking the root key count from ten to eleven. The block was already emitted by the KiCad exporter and read by the ADK DRC runner and the cockpit; it had never been written down here, so it was an undocumented root key travelling between three tools. Fixed the `adapter` value as a registry id, never a filesystem path (pattern, no `.drc` suffix), and stated the consumer rule: refuse when an adapter is needed and absent, never default silently. Added [`schemas/chiplet.schema.json`](../schemas/chiplet.schema.json), normative for structure, with the reference reader still normative for semantics; wired it into the conformance gate over the whole committed corpus, with the schema-vs-reader divergences pinned. Backward compatible and optional; `format_version` stays `"1.0"`. |
+| 1.0 | 2026-09-04 | Defined the format's line-break set as LF and CRLF, and made NEL (`U+0085`), `U+2028` and `U+2029` anywhere in a document ill-formed, refused by both reference readers on the text before any YAML parse, with the refusal naming the code point and the line. This is an INTENTIONAL behaviour change, not a regression: `name: demo<U+2028>trailing` loads today in yaml-cpp 0.8.0 and stops loading after this release, and a consumer meets that through its next vendoring bump. It is a clarification rather than a MAJOR because the format had never defined its line-break set, so those bytes were never legal; yaml-cpp accepting them was implementation behaviour that PyYAML already refused on the same bytes; and the population is zero, measured twice (a sweep of every `.chiplet` outside build trees plus the YAML and stackups shipped with them: zero occurrences of `U+2028`, `U+2029` and `U+0085`; the KiCad plugin's own sweep of 187 `.chiplet`: zero). Added the matching writer rule (escape the three inside a double-quoted scalar) and fixed the Python reference writer, which emitted them raw into a single-quoted scalar and then folded them on the next read, so the value did not survive its own round trip. No document shape changed and `format_version` stays `"1.0"`. |
