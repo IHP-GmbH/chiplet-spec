@@ -155,3 +155,159 @@ def test_the_writer_escapes_a_forbidden_line_break():
         assert char not in text
         assert escape in text
         assert cfio.loads(text)["assembly"]["name"] == "demo" + char + "x"
+
+
+#: Every top-level key the PyYAML 6.0.3 emitter cannot write as a KEY LINE, with
+#: the line it writes instead. Measured, not predicted, and that is the point of
+#: the writer rule being a post-check on the emitted text: three different
+#: spellings escape the grammar and only one of them is quoted, so a regex on the
+#: key would pass `yes`, `null` and `1.0` and a rule about quoting would miss the
+#: explicit key and the bare key with a space.
+_KEYS_THE_EMITTER_CANNOT_WRITE_BARE = [
+    ("a\u2028b", '? "a\\Lb"'),
+    ("a\u0085b", '? "a\\x85b"'),
+    ("a\u2029b", '? "a\\Pb"'),
+    ("a" * 200 + "\rb", "? \"" + "a" * 200 + "\\r\\"),
+    ("a\rb", '"a\\rb":'),
+    ("a b", "a b:"),
+    ("a: b", "'a: b':"),
+    ("yes", "'yes':"),
+    ("null", "'null':"),
+    ("1.0", "'1.0':"),
+]
+
+
+@pytest.mark.parametrize("key,line", _KEYS_THE_EMITTER_CANNOT_WRITE_BARE,
+                         ids=[repr(k) for k, _ in
+                              _KEYS_THE_EMITTER_CANNOT_WRITE_BARE])
+def test_the_writer_refuses_a_top_level_key_it_cannot_emit_as_a_key_line(key,
+                                                                        line):
+    """SPEC-41: the writer must not emit a document its own splitter misreads.
+
+    Each of these produced a file whose split reported two top-level keys and
+    whose parse reported three, with no diagnostic from either side, and the
+    lines went to `assembly`, whose owner drops them on the next re-export. The
+    refusal names the key and the line, because the author's mental model is the
+    dict they passed and the defect is in the bytes.
+    """
+    doc = {"format_version": "1.0", "assembly": {"name": "demo"},
+           key: {"x": 1}}
+    for validate in (True, False):
+        with pytest.raises(cfio.ChipletFormatError) as excinfo:
+            cfio.dumps(doc, validate=validate)
+        message = str(excinfo.value)
+        assert repr(key) in message, message
+        assert repr(line) in message, message
+        assert "Rename the key, or nest it" in message, message
+
+
+def test_the_writer_rule_is_about_the_top_level_only():
+    """Nested keys are unrestricted, and the refusal must not creep into them.
+
+    The grammar is a statement about column zero and nothing else. A nested key
+    with a space, a colon or a reserved word is quoted by the emitter, indented,
+    and owned by the block it sits in, so it costs nobody anything.
+    """
+    doc = {"format_version": "1.0",
+           "assembly": {"name": "demo", "a b": 1, "yes": 2, "a: b": 3}}
+    text = cfio.dumps(doc, validate=False)
+    assert cfio.loads(text, validate=False)["assembly"]["a b"] == 1
+    assert list(cfio.top_level_blocks(text)) == ["format_version", "assembly"]
+
+
+def test_the_writer_output_splits_into_exactly_the_keys_it_was_given():
+    """The property the refusal protects, asserted on a document that passes.
+
+    A legal document goes out with every top-level key recoverable from the text
+    by the same splitter every host runs, in the order it was written. Without
+    this the refusal above could be satisfied by a writer that refuses
+    everything.
+    """
+    doc = cfio.load(EXAMPLES / "interposer_demo_design.chiplet")
+    text = cfio.dumps(doc)
+    assert list(cfio.top_level_blocks(text)) == list(doc)
+    assert list(cfio.loads(text)) == list(doc)
+
+
+def test_dump_to_a_file_goes_through_the_same_refusal():
+    """dump() is dumps() plus a write, so it must not be a way around the rule."""
+    import tempfile
+    doc = {"format_version": "1.0", "assembly": {"name": "demo"}, "a b": {}}
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "out.chiplet"
+        with pytest.raises(cfio.ChipletFormatError):
+            cfio.dump(doc, target)
+
+
+@pytest.mark.parametrize("validate", [False, True])
+def test_dump_refused_key_preserves_existing_file_bytes(tmp_path, validate):
+    """SPEC-41 finding 6: serialization refusal must precede opening for write."""
+    target = tmp_path / "existing.chiplet"
+    original = b'# keep this comment\r\nformat_version: "1.0"\r\nassembly:\r\n  name: demo\r\n'
+    target.write_bytes(original)
+    doc = {"format_version": "1.0", "assembly": {"name": "demo"}, "a b": {}}
+    with pytest.raises(cfio.ChipletFormatError, match="cannot be written as a key line"):
+        cfio.dump(doc, target, validate=validate)
+    assert target.read_bytes() == original
+
+
+@pytest.mark.parametrize("key, emitted, recovered", [
+    (123, "123: {}", "123"),
+    (None, "null: {}", "null"),
+])
+@pytest.mark.parametrize("validate", [False, True])
+def test_non_string_top_level_key_has_type_diagnostic(key, emitted, recovered, validate):
+    doc = {"format_version": "1.0", "assembly": {"name": "demo"}, key: {}}
+    with pytest.raises(cfio.ChipletFormatError) as caught:
+        cfio.dumps(doc, validate=validate)
+    message = str(caught.value)
+    assert f"top-level key {key!r} is not a string" in message
+    assert f"emitter wrote {emitted!r}" in message
+    assert f"block reader reads it back as the string key {recovered!r}" in message
+    assert "Make it a string key" in message
+    assert "or nest it" in message
+    assert "attributes those lines to the preceding key" not in message
+
+
+def test_string_key_outside_grammar_keeps_its_distinct_diagnostic():
+    doc = {"format_version": "1.0", "assembly": {"name": "demo"}, "a b": {}}
+    with pytest.raises(cfio.ChipletFormatError) as caught:
+        cfio.dumps(doc)
+    message = str(caught.value)
+    assert "top-level key 'a b' cannot be written as a key line" in message
+    assert "emitter wrote 'a b: {}'" in message
+    assert "is not a string" not in message
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\t", " \t \t"])
+def test_block_grammar_blank_lines_are_space_and_tab(blank):
+    text = 'format_version: "1.0"\n' + blank + '\nassembly:\n  name: demo\n'
+    blocks = cfio.top_level_blocks(text)
+    assert list(blocks) == ["format_version", "assembly"]
+    assert blocks["format_version"] == 'format_version: "1.0"\n' + blank + '\n'
+
+
+@pytest.mark.parametrize("char", ["\u00a0", "\u1680", "\u2000", "\u2003",
+                                  "\u202f", "\u205f", "\u3000"])
+def test_unicode_space_continuation_is_readable_but_not_splittable(char):
+    text = ('format_version: "1.0"\nassembly:\n  name: "demo\n'
+            + char + '\n  cont"\nflow:\n  steps: []\n')
+    assert cfio.loads(text)["assembly"]["name"]
+    with pytest.raises(cfio.ChipletFormatError, match="line 4: unattributable"):
+        cfio.top_level_blocks(text)
+
+
+@pytest.mark.parametrize("char", ["\v", "\f", "\x1c", "\x1d", "\x1e", "\x1f"])
+def test_c0_separators_are_not_blank_line_content(char):
+    # These bytes need not be valid YAML: the splitter's blank set is a
+    # line-grammar rule and cannot depend on Python's Unicode whitespace table.
+    text = 'format_version: "1.0"\n' + char + '\nassembly:\n  name: demo\n'
+    with pytest.raises(cfio.ChipletFormatError, match="line 2: unattributable"):
+        cfio.top_level_blocks(text)
+
+
+def test_document_markers_stay_in_the_current_block():
+    text = '---\nformat_version: "1.0"\nassembly:\n  name: demo\n...\n'
+    blocks = cfio.top_level_blocks(text)
+    assert blocks[cfio.PREAMBLE_KEY] == '---\n'
+    assert blocks["assembly"] == 'assembly:\n  name: demo\n...\n'

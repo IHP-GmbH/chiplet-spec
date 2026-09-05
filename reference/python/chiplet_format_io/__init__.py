@@ -102,7 +102,7 @@ ACCEPTED_FORMAT_VERSIONS = ("1.0",)
 #: distribution version too (``pyproject.toml`` reads it from here), so a consumer
 #: that installed the package and one that vendored the file agree on the number.
 #: Bumped under the same policy as everything else (docs/VERSION_POLICY.md).
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 #: The closed ``interfaces[].type`` vocabulary (spec validation rule 4). One list
 #: lives in four places -- here, ``schemas/chiplet.schema.json``, the spec prose
@@ -703,8 +703,10 @@ def loads(text: str, *, allow_intermediate: bool = False, validate: bool = True,
     anything is read out of it. That is not a style rule: PyYAML keeps the last
     value and yaml-cpp the first, so this reader and the C++ one would report
     different documents from one file, and nothing downstream, schema included,
-    can tell. A quoted key at column zero makes a document unsplittable, not
-    invalid, and is read normally (see :func:`top_level_blocks` and flow rule 1).
+    can tell. A line at column zero that no top-level key owns (a quoted key, an
+    explicit key, a bare key outside the grammar) makes a document unsplittable,
+    not invalid, and is read normally (see :func:`top_level_blocks` and flow
+    rule 1).
 
     Refuses, for the same reason and ahead of the YAML parse rather than after
     it, a document whose line breaks are not LF or CRLF: NEL (U+0085), U+2028 or
@@ -756,6 +758,16 @@ def dumps(data: Dict[str, Any], *, validate: bool = True,
     block the grammar could not delimit (``FlowSource::NotDelimitable``). A host
     that needs rule 4 keeps the original text beside the parsed document and
     writes the text; this function is not that host.
+
+    Refuses a mapping whose top-level keys this emitter cannot write as KEY
+    LINES, which is the writer half of the top-level block grammar. Measured on
+    PyYAML 6.0.3, a top-level key carrying a space comes out as a bare ``a b:``
+    that the grammar does not recognise, one carrying NEL, LS, PS or a CR comes
+    out as an explicit key (``? "a\\Lb"`` on one line, ``: x: 1`` on the next),
+    and a key such as ``yes`` or ``1.0`` comes out quoted. All three escape the
+    splitter, which then attributes those lines to the PRECEDING key, while
+    ``loads`` reads a key the split never saw. See
+    :func:`_check_writer_top_level_keys`, which is where the refusal is decided.
     """
     out = dict(data)
     if validate:
@@ -764,13 +776,15 @@ def dumps(data: Dict[str, Any], *, validate: bool = True,
         # on write (deduped default channel; every event to on_warn).
         _validate(out, allow_intermediate=True, on_warn=on_warn)
     _apply_write_version(out)
-    return yaml.dump(
+    text = yaml.dump(
         out,
         Dumper=_CanonicalDumper,
         sort_keys=False,
         default_flow_style=False,
         allow_unicode=True,
     )
+    _check_writer_top_level_keys(text, out)
+    return text
 
 
 #: What a scalar may not carry raw on the way OUT: the reader's set with CR
@@ -826,9 +840,14 @@ _CanonicalDumper.add_representer(str, _represent_str)
 
 def dump(data: Dict[str, Any], path, *, validate: bool = True,
          on_warn: Optional[Callable[[str], None]] = None) -> None:
-    """Serialize a .chiplet mapping to a file."""
+    """Serialize a .chiplet mapping to a file.
+
+    Serialize before opening the destination, so refused input leaves an
+    existing file untouched. This does not make filesystem writes atomic.
+    """
+    text = dumps(data, validate=validate, on_warn=on_warn)
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(dumps(data, validate=validate, on_warn=on_warn))
+        fh.write(text)
 
 
 # --- the top-level block grammar -------------------------------------------
@@ -863,6 +882,21 @@ _KEY_LINE_RE = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:\s.*)?\Z")
 #: validation rule 7 forbids one.
 _QUOTED_KEY_LINE_RE = re.compile(
     r"""^(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'):(?:\s.*)?\Z""")
+
+#: A BLOCK SEQUENCE ENTRY at column zero: ``-`` followed by a space, a tab or
+#: nothing at all. It is not a key line, and it is the one non-key line at column
+#: zero that IS attributable: PyYAML writes a block sequence under a mapping key
+#: at the parent's indentation, so ``components:`` followed by ``- id: ...``
+#: lines is what every generated document in this ecosystem looks like (68 such
+#: lines across the 77 tracked ``.chiplet`` when the rule below was written). The
+#: entry belongs to the key whose block it sits in, and both a splitter and a
+#: parser agree that it does.
+_SEQUENCE_ENTRY_RE = re.compile(r"^-(?:[ \t].*)?\Z")
+
+#: A document marker, ``---`` or ``...``, alone or introducing a value. Not a key
+#: line: it stays in the current block, which is the preamble only before the
+#: first key line.
+_DOCUMENT_MARKER_RE = re.compile(r"^(?:---|\.\.\.)(?:[ \t].*)?\Z")
 
 #: Key of the PREAMBLE bucket: the lines before the first key line (a leading
 #: ``---``, a file header comment). They belong to no top-level key.
@@ -905,15 +939,55 @@ def top_level_key(line_content: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _is_unattributable(line_content: str) -> bool:
+    """Is this line content at column zero with no top-level key that owns it?
+
+    The generalisation of the quoted-key rule, and the property it protects is
+    the one SPEC-36 named: the split and the parse must not disagree about the
+    document's top-level keys. A line at column zero that is not a key line
+    starts no block, so a splitter attaches it to the PRECEDING key, whose owner
+    regenerates it away on the next re-export, while a YAML parser reads a
+    top-level key the split never saw.
+
+    Column zero is "does not start with a space". A tab is therefore column
+    zero, deliberately: this grammar has no notion of tab indentation, and YAML
+    has none either in block context (measured on PyYAML 6.0.3 and yaml-cpp
+    0.8.0: both refuse a tab-indented mapping outright), so a tab-led line is
+    never a line an implementation may quietly attribute to the open block.
+
+    Five shapes at column zero are attributable and are not this:
+
+    * a blank line (only SPACE and TAB), which belongs to its current block;
+    * a comment (``#``) and a directive (``%``), on the same terms;
+    * a document marker (``---``, ``...``), which stays in the current block
+      (the preamble only before the first key line);
+    * a BLOCK SEQUENCE ENTRY (``-`` then a space, a tab or end of line), which
+      belongs to the key whose block it sits in. This one is not a nicety: it is
+      how PyYAML writes every ``components:`` list this ecosystem produces, and
+      a rule without it would call almost every real document unsplittable;
+    * a key line, which opens a block of its own.
+    """
+    if not line_content.strip(" \t"):
+        return False
+    if line_content[0] in " #%":
+        return False
+    if _DOCUMENT_MARKER_RE.match(line_content):
+        return False
+    if _SEQUENCE_ENTRY_RE.match(line_content):
+        return False
+    return top_level_key(line_content) is None
+
+
 def _scan_top_level(text: str) -> Tuple[Dict[str, str], Optional[str]]:
     """One pass over the source text: the blocks, and why they may be unusable.
 
     Returns ``(blocks, not_splittable)``. ``not_splittable`` is ``None`` for a
     document that can be split, and otherwise the reason it cannot be, which the
     splitting accessors raise and :func:`loads` ignores. The two are different
-    verdicts: a quoted key at column zero leaves nobody able to say who owns
-    those bytes, and that is a reason not to SPLIT or WRITE the document, not a
-    reason to refuse to read it.
+    verdicts: a line at column zero that is not a key line and not one of the
+    attributable shapes (see :func:`_is_unattributable`) leaves nobody able to
+    say who owns those bytes, and that is a reason not to SPLIT or WRITE the
+    document, not a reason to refuse to read it.
 
     Raises :class:`ChipletFormatError` for a REPEATED top-level key, which is a
     different thing again: that document is ill-formed and every caller here,
@@ -938,14 +1012,30 @@ def _scan_top_level(text: str) -> Tuple[Dict[str, str], Optional[str]]:
                     f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
             current = key
             blocks[key] = ""
-        elif not_splittable is None and _QUOTED_KEY_LINE_RE.match(content):
-            not_splittable = (
-                f"line {number}: quoted key at column zero ({content!r}). A "
-                f"quoted key is valid YAML but does not start a top-level "
-                f"block, so this document cannot be split without attaching "
-                f"the block to the preceding key, where its owner drops it on "
-                f"the next re-export. Emit bare keys and quote values "
-                f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
+        elif not_splittable is None and _is_unattributable(content):
+            if _QUOTED_KEY_LINE_RE.match(content):
+                not_splittable = (
+                    f"line {number}: quoted key at column zero ({content!r}). "
+                    f"A quoted key is valid YAML but does not start a "
+                    f"top-level block, so this document cannot be split "
+                    f"without attaching the block to the preceding key, where "
+                    f"its owner drops it on the next re-export. Emit bare keys "
+                    f"and quote values "
+                    f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
+            else:
+                not_splittable = (
+                    f"line {number}: unattributable line at column zero "
+                    f"({content!r}). It is not a key line, and not a comment, "
+                    f"a document marker, a directive or a block sequence entry "
+                    f"either, so the line grammar cannot establish ownership. "
+                    f"Guessing can hide a top-level key or misinterpret a quoted "
+                    f"scalar continuation. Two problematic key "
+                    f"spellings the Python emitter can produce for a key it cannot "
+                    f"write bare are the explicit key (`? ...` with its `: ...` "
+                    f"value line) and a bare key outside the grammar (`a b:`). "
+                    f"Emit top-level keys as key lines and re-emit quoted scalar "
+                    f"continuations with a conforming writer "
+                    f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
         blocks[current] += line
     if not blocks[PREAMBLE_KEY]:
         del blocks[PREAMBLE_KEY]
@@ -963,10 +1053,13 @@ def top_level_blocks(text: str) -> Dict[str, str]:
 
     Raises :class:`ChipletFormatError` twice over, for two different reasons:
 
-    * a quoted key at column zero. It is not a key line, so splitting would
-      attach that block to the preceding key and lose it on the next re-export.
-      The document is still valid and :func:`loads` still reads it; splitting is
-      what cannot be done.
+    * an unattributable line at column zero: a quoted key, an explicit key
+      (``? ...``), a bare key outside the grammar (``a b:``), or anything else
+      there that is not a key line, a comment, a directive, a document marker or
+      a block sequence entry. It starts no block, so splitting would attach
+      those bytes to the preceding key and lose them on the next re-export while
+      a parser reads a key the split never saw. The document is still valid and
+      :func:`loads` still reads it; splitting is what cannot be done.
     * a repeated top-level key. That document is ill-formed and :func:`loads`
       refuses it too.
     """
@@ -984,3 +1077,72 @@ def top_level_block(text: str, key: str) -> Optional[str]:
     that did not author it re-emits unchanged.
     """
     return top_level_blocks(text).get(key)
+
+
+def _check_writer_top_level_keys(text: str, data: Dict[str, Any]) -> None:
+    """Refuse output whose top-level keys the split cannot recover, in order.
+
+    The writer half of the grammar, and it is a POST-check on the emitted text
+    rather than a regex on the keys, deliberately. A pre-check would have to
+    predict the emitter, and the emitter has three ways of writing a key that is
+    not a bare identifier, only one of which a key regex would catch: it quotes
+    ``yes``, ``null`` and ``1.0`` (which pass the key-line expression happily and
+    still come out as a quoted key), it writes an explicit key ``? ...`` with a
+    separate ``: ...`` value line for a key carrying a forbidden line break, and
+    it writes a key with a space bare, as ``a b:``, which is outside the grammar.
+    Running the reader's own splitter over the finished bytes catches all three
+    with one mechanism and cannot drift from the reader, because it IS the
+    reader.
+
+    What it refuses is exactly the SPEC-36 property produced by our own writer:
+    a document whose split and whose parse disagree about the top-level keys.
+    """
+    blocks, not_splittable = _scan_top_level(text)
+    split_keys = [key for key in blocks if key != PREAMBLE_KEY]
+    expected = list(data)
+    if not_splittable is None and split_keys == expected:
+        return
+
+    # The FIRST key the split did not see, in the order they were written. A
+    # position check and not a membership test: the split can also recover a key
+    # under a different NAME (an integer key 1 comes back as the string "1"),
+    # and that is the same defect one step further along.
+    missed, missed_at, missed_found = None, 0, False
+    for position, key in enumerate(expected):
+        if position >= len(split_keys) or split_keys[position] != key:
+            missed, missed_at = key, position
+            missed_found = True
+            break
+
+    # And the line the emitter wrote for it. Every top-level key produces
+    # exactly one line at column zero that either opens a block or breaks the
+    # grammar, in document order, so the missed key's line stands at its own
+    # position in that list.
+    interesting = [content for content in
+                   (_content(raw) for raw in _iter_lines(text))
+                   if _is_unattributable(content)
+                   or top_level_key(content) is not None]
+    line = interesting[missed_at] if missed_at < len(interesting) else ""
+    if missed_found and not isinstance(missed, str):
+        recovered = top_level_key(line)
+        consequence = (
+            f"The block reader reads it back as the string key {recovered!r}, "
+            f"not the original {type(missed).__name__} key. "
+            if recovered is not None else
+            "The block reader can recover only string keys, and this emitted "
+            "line does not open a key block. ")
+        raise ChipletFormatError(
+            f"top-level key {missed!r} is not a string: the emitter wrote "
+            f"{line!r}. {consequence}Make it a string key that the emitter "
+            f"can write as a key line, or nest it under one "
+            f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")
+    raise ChipletFormatError(
+        f"top-level key {missed!r} cannot be written as a key line: the "
+        f"emitter wrote {line!r}. A top-level key is a bare identifier "
+        f"[A-Za-z0-9_][A-Za-z0-9_.-]* that the emitter writes as a key line at "
+        f"column zero; nested keys are unrestricted. Written as it stands, this "
+        f"document's own splitter attributes those lines to the preceding key, "
+        f"whose owner drops them on the next re-export, while a reader sees a "
+        f"top-level key the split never did. Rename the key, or nest it under "
+        f"one that is a bare identifier "
+        f"(docs/CHIPLET_FORMAT_SPEC.md, top-level block grammar).")

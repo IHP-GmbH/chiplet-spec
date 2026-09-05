@@ -975,6 +975,62 @@ included, zero lone CR and zero of the other three. All three walked committed,
 machine-written output, which is the population most likely to be clean, so they
 raise confidence and do not establish the claim on their own.
 
+### Unattributable lines at column zero (normative)
+
+A key line opens a block. Every other line at column zero has to belong to
+somebody, and for most of them it does: this section says which, and refuses the
+rest rather than guessing.
+
+Column zero means the line content does not start with a SPACE. A tab therefore
+counts as column zero, deliberately: this grammar has no notion of tab
+indentation and YAML has none either in block context, so a nonblank tab-led
+line cannot quietly be attributed to the block above it.
+
+At column zero, five shapes are ATTRIBUTABLE and a splitter carries them in the
+block they sit in:
+
+- a blank line: its content consists only of SPACE (U+0020) and TAB (U+0009),
+  possibly empty; other Unicode whitespace and C0 separators are not blank;
+- a comment, `#`;
+- a directive, `%`;
+- a document marker, `---` or `...`, which belongs to the current block (the
+  preamble only before the first key line);
+- a BLOCK SEQUENCE ENTRY: `-` followed by a space, a tab, or end of content.
+
+The last one is the load-bearing exemption, not a courtesy. PyYAML writes a
+block sequence under a mapping key at the PARENT's indentation, so a
+`components:` block is followed by `- id: ...` lines sitting at column zero, and
+that is what almost every generated `.chiplet` in this ecosystem looks like: of
+the 70 column-zero non-key lines across the 77 tracked `.chiplet` when this rule
+was written, 68 were exactly that. A rule that called every non-key line at
+column zero unattributable would refuse to split nearly every real document.
+The entry is attributable in the strong sense: the splitter and a YAML parser
+agree that it belongs to the key whose block it sits in.
+
+Anything else at column zero makes the document NOT SPLITTABLE. A splitter MUST
+refuse to split it and MUST NOT attribute those bytes to the preceding key. The
+document can still be valid YAML: a reader MUST not reject it merely because it
+cannot be split, but other syntax and load-time checks still apply. This is the
+same verdict, on the same terms, as the quoted key in the next section, which is one
+spelling of this rule and keeps its own diagnostic because its cause is
+different.
+
+The motivating defect is a top-level key to a YAML parser and no key at all to
+the grammar: the SPLIT and the PARSE report different documents from one file.
+The broader rule also refuses continuations whose ownership the line grammar
+cannot establish; it does not assert that every refused line is a parsed key.
+Three problematic key spellings came out of a reference WRITER rather than
+hand editing:
+
+- an EXPLICIT key, `? "a\Lb"` on one line with its value on the next, `: x: 1`,
+  which is what PyYAML 6.0.3 emits for a top-level key carrying NEL, LS, PS or a
+  CR;
+- a BARE key outside the grammar, `a b:`, which is what the same emitter writes
+  for a top-level key carrying a space;
+- a QUOTED key, `"flow":` or `'yes':`, which is what it writes for a key that
+  would otherwise re-read as a boolean, a null or a number, and what a
+  document-wide key-quoting emitter switch produces for every key at once.
+
 ### Top-level keys are written bare
 
 `"flow":` and `'flow':` at column zero are valid YAML and are NOT key lines under
@@ -996,6 +1052,45 @@ rather than mis-attribute the block, and MUST NOT write it back (see below).
 The writer rule is therefore a countermeasure, not a prohibition: it keeps a
 document from reaching the shape in which the ownership guard cannot answer, and
 nothing in the schema forbids that shape.
+
+### A writer refuses a top-level key it cannot emit as a key line
+
+The rule above, stated as the obligation it puts on a producer. A top-level key
+is a bare identifier `[A-Za-z0-9_][A-Za-z0-9_.-]*` that the emitter writes as a
+KEY LINE at column zero. Nested keys are unrestricted: the grammar is a statement
+about column zero and has nothing to say about anything indented under one.
+
+A WRITER MUST refuse to write a mapping whose top-level keys it cannot emit that
+way, and the refusal MUST name the key. It MUST NOT emit the document and leave
+the disagreement in the file, which is what a writer that only checks its
+quoting does: the quoted key is one of three spellings, and the other two, the
+explicit key and the bare key with a space, are not quoted at all.
+
+The check that covers all three is a POST-check and not a rule about keys: emit
+the document, split the text just emitted with the same splitter every host runs,
+and refuse unless the split returns exactly the keys the writer was given, in
+order. That mechanism cannot drift from the reader, because it is the reader, and
+it catches the keys an emitter quotes on its own initiative (`yes`, `null`,
+`1.0`), which a regular expression over the key would pass.
+
+The Python reference does this in `dumps()`, and its refusal names the key, the
+line the emitter actually wrote, and the way out (rename the key, or nest it).
+The C++ reference checks its complete output too, after appending any retained
+`flow_yaml` source slice. Its generated mapping uses literal top-level names,
+but the retained slice is caller-supplied text and can introduce additional or
+unattributable lines. The expected key sequence comes from the generated mapping
+plus the one emitted `flow` block, not from parsing the combined output. A failed
+post-check raises `ChipletFormatError`, including with validation disabled.
+
+This is a line-based ownership grammar, not a YAML lexer. It cannot distinguish
+a key-shaped continuation such as `netlist: x` inside a multi-line quoted scalar
+from a real key line; a harmless non-key continuation can instead be refused.
+The readers do not claim that splitting arbitrary hand-authored YAML recovers its
+parsed keys. Neither reference emitter generates that quoted spelling from a
+mapping. Writer post-checks close the producer boundary by requiring the emitted
+key sequence to match the known intended sequence, including when C++ receives
+a caller-supplied source slice. This does not turn the splitter into a parser or
+establish semantic validity of arbitrary source text.
 
 ### Block extent
 
@@ -1035,9 +1130,13 @@ what makes flow rule 4 implementable:
 
 A `flow` block can be spelled so that YAML sees it and this grammar does not: a
 flow-style document (`{format_version: "1.0", ..., flow: {...}}`), a key line
-written `flow :`, or any file that is not splittable at all because it carries a
-quoted key at column zero. The block then has no slice, and rule 4's byte for
-byte is not a thing that can be done to it.
+written `flow :`, or any file that is not splittable at all because some line at
+column zero is one no top-level key owns. The block then has no slice, and rule
+4's byte for byte is not a thing that can be done to it. The first two of those
+are themselves lines at column zero that no key owns, so such a document is not
+splittable either; "the flow block has no slice" is the consequence a
+source-slice writer acts on, and "the document cannot be split" is the wider fact
+it follows from.
 
 Three obligations follow, and they are deliberately not the same obligation:
 
@@ -1068,7 +1167,9 @@ Every implementation is measured against
 [`conformance/fixtures/top_level_blocks_cases.json`](../conformance/fixtures/top_level_blocks_cases.json),
 never against another implementation: accept and reject key lines, documents with
 the exact expected slice per top-level key, the documents a splitter must refuse
-to split, the documents a reader must refuse to load, and the documents whose
+to split (`quoted_key_at_column_zero` and the wider
+`unattributable_line_at_column_zero`), the documents a reader must refuse to load
+(`repeated_top_level_key`, `forbidden_line_break`), and the documents whose
 `flow` block has no slice. The verdicts are recorded separately, because a
 document can be loadable and not splittable, splittable and not writable, and
 splittable and not loadable (a forbidden line break, where the grammar has an
